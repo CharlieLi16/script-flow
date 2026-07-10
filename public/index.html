@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Script Flow</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-name">Script Flow</span>
+        <span class="brand-tag">视频剧本时间线</span>
+      </div>
+      <div class="topbar-actions">
+        <input type="text" id="timeline-title" class="title-input" placeholder="剧本标题" />
+        <button type="button" id="theme-toggle" class="btn-icon theme-toggle" aria-label="切换浅色模式" title="切换主题">
+          <span class="theme-icon" aria-hidden="true">☀</span>
+        </button>
+        <button type="button" id="library-btn" class="btn btn-ghost">设定集管理</button>
+        <button type="button" id="preview-btn" class="btn btn-preview">▶ 预览</button>
+        <div class="topbar-node-actions">
+          <button type="button" id="save-node-top-btn" class="btn btn-save" disabled>保存</button>
+          <button type="button" id="delete-node-top-btn" class="btn btn-danger" disabled>删除</button>
+          <label class="autosave-toggle" title="编辑后自动保存">
+            <input type="checkbox" id="autosave-toggle" />
+            <span class="autosave-switch" aria-hidden="true"></span>
+            <span>自动保存</span>
+          </label>
+        </div>
+        <button type="button" id="add-node-btn" class="btn btn-primary">+ 添加节点</button>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <section class="timeline-panel">
+        <div class="timeline-viewport">
+          <button type="button" id="scroll-left" class="scroll-nav scroll-nav-left" aria-label="向左滚动">‹</button>
+          <div class="timeline-scroll" id="timeline-scroll">
+            <div class="timeline-track" id="timeline-track">
+              <div class="axis">
+                <span class="axis-start" aria-hidden="true"></span>
+                <span class="axis-line"></span>
+                <span class="axis-arrow" aria-hidden="true"></span>
+              </div>
+              <div class="nodes-layer" id="nodes-layer"></div>
+            </div>
+          </div>
+          <button type="button" id="scroll-right" class="scroll-nav scroll-nav-right" aria-label="向右滚动">›</button>
+        </div>
+        <p class="timeline-hint">点击节点编辑剧情 · 拖拽排序 · 滚轮/边缘自动滚动 · 空白处双击添加节点</p>
+      </section>
+
+      <aside class="editor-panel" id="editor-panel" hidden>
+        <div class="editor-header">
+          <h2>节点编辑</h2>
+          <button type="button" id="close-editor" class="btn-icon" aria-label="关闭">×</button>
+        </div>
+
+        <form id="node-form" class="editor-form">
+          <div class="node-basics">
+            <label>
+              <span>标题</span>
+              <input type="text" id="field-title" name="title" />
+            </label>
+            <label>
+              <span>时间</span>
+              <input type="text" id="field-time" name="timeLabel" placeholder="00:00" />
+            </label>
+          </div>
+          <div class="node-basics node-timing">
+            <label>
+              <span>画面时长</span>
+              <div class="input-suffix">
+                <input type="number" id="field-duration" name="durationMs" min="0.5" max="600" step="0.5" />
+                <em>秒</em>
+              </div>
+            </label>
+            <label>
+              <span>运镜</span>
+              <select id="field-camera" name="cameraPreset">
+                <option value="static">静止</option>
+                <option value="push">缓慢推进</option>
+                <option value="pull">缓慢拉远</option>
+                <option value="left">向左平移</option>
+                <option value="right">向右平移</option>
+                <option value="up">向上摇镜</option>
+                <option value="down">向下摇镜</option>
+              </select>
+            </label>
+          </div>
+          <label>
+            <span>剧情</span>
+            <textarea id="field-script" name="script" rows="4" placeholder="镜头、旁白、动作…"></textarea>
+          </label>
+          <label>
+            <span>字幕 / 台词</span>
+            <textarea id="field-subtitle" name="subtitle" rows="2" placeholder="预览时显示在画面底部…"></textarea>
+          </label>
+
+          <section class="image-section">
+            <div class="section-heading">
+              <h3>分镜图</h3>
+              <div class="image-actions">
+                <label class="btn btn-ghost btn-sm upload-label">
+                  上传
+                  <input type="file" id="image-upload" accept="image/*" hidden />
+                </label>
+                <button type="button" id="add-to-library-btn" class="btn btn-ghost btn-sm" disabled>存入设定集</button>
+              </div>
+            </div>
+            <div class="image-preview-shell">
+              <div class="image-preview" id="image-preview">
+                <span class="image-placeholder">暂无图片</span>
+              </div>
+              <div class="gen-progress-overlay" id="gen-progress-overlay" hidden aria-live="polite">
+                <div class="gen-progress-content">
+                  <strong id="gen-progress-message">正在生成</strong>
+                  <span id="gen-progress-percent" class="gen-progress-percent">0%</span>
+                  <div class="gen-progress-track" aria-hidden="true">
+                    <span id="gen-progress-bar"></span>
+                  </div>
+                  <button type="button" id="retry-generate-btn" class="btn btn-primary btn-sm" hidden>再试一次</button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="gen-section">
+            <h3>AI 出图</h3>
+
+            <div class="ref-section">
+              <div class="ref-header">
+                <span class="ref-label">参考图</span>
+                <span id="ref-count" class="ref-count">未选择</span>
+              </div>
+              <button type="button" id="choose-library-ref-btn" class="library-picker-btn">
+                <span class="library-picker-icon" aria-hidden="true">▦</span>
+                <span>
+                  <strong>从设定集选择</strong>
+                  <small>角色、场景、风格</small>
+                </span>
+                <span class="library-picker-arrow" aria-hidden="true">›</span>
+              </button>
+              <div class="ref-quick-actions">
+                <button type="button" id="use-current-ref-btn" class="btn btn-ghost btn-sm" disabled>当前分镜</button>
+                <label class="btn btn-ghost btn-sm upload-label">
+                  上传参考
+                  <input type="file" id="ref-upload" accept="image/*" hidden />
+                </label>
+              </div>
+              <div class="ref-chips" id="ref-chips">
+                <span class="ref-empty-hint">尚未选择参考图</span>
+              </div>
+            </div>
+
+            <div class="gen-settings">
+              <label>
+                <span>模型</span>
+                <select id="gen-provider" disabled>
+                  <option value="">加载中…</option>
+                </select>
+              </label>
+              <label>
+                <span>尺寸</span>
+                <select id="gen-size">
+                  <option value="1024x1024">1:1</option>
+                  <option value="1792x1024">16:9</option>
+                  <option value="1024x1792">9:16</option>
+                </select>
+              </label>
+            </div>
+            <label>
+              <span>Prompt</span>
+              <textarea id="gen-prompt" rows="3" placeholder="画面、构图、光线…"></textarea>
+            </label>
+            <div class="gen-actions">
+              <button type="button" id="fill-prompt-btn" class="btn btn-ghost">用剧情填充</button>
+              <button type="button" id="generate-btn" class="btn btn-primary">生成图片</button>
+            </div>
+            <p id="gen-status" class="gen-status" hidden></p>
+          </section>
+
+        </form>
+      </aside>
+
+      <div class="editor-empty" id="editor-empty">
+        <p>选择时间线上的一个节点开始编辑</p>
+      </div>
+    </main>
+  </div>
+
+  <div class="preview-overlay" id="preview-overlay" hidden>
+    <div class="preview-shell">
+      <header class="preview-header">
+        <div>
+          <span class="preview-kicker">ANIMATIC PREVIEW</span>
+          <h2 id="preview-title">Script Flow</h2>
+        </div>
+        <div class="preview-header-actions">
+          <span id="preview-node-count" class="preview-node-count">0 / 0</span>
+          <button type="button" id="preview-close" class="btn-icon" aria-label="关闭预览">×</button>
+        </div>
+      </header>
+      <main class="preview-stage" id="preview-stage">
+        <div class="preview-image-frame">
+          <img id="preview-image" class="preview-image" alt="" />
+          <div id="preview-no-image" class="preview-no-image" hidden>这个节点还没有分镜图</div>
+          <div class="preview-caption" id="preview-caption"></div>
+        </div>
+        <div class="preview-scene-meta">
+          <span id="preview-scene-time">00:00</span>
+          <strong id="preview-scene-title">—</strong>
+          <span id="preview-scene-camera">静止</span>
+        </div>
+      </main>
+      <footer class="preview-controls">
+        <div class="preview-progress-row">
+          <span id="preview-current-time">00:00</span>
+          <input type="range" id="preview-progress" min="0" max="1" step="0.01" value="0" aria-label="预览进度" />
+          <span id="preview-total-time">00:00</span>
+        </div>
+        <div class="preview-control-row">
+          <button type="button" id="preview-restart" class="btn btn-ghost">↺ 重头</button>
+          <button type="button" id="preview-play" class="btn btn-primary preview-play">▶ 播放</button>
+          <button type="button" id="preview-prev" class="btn btn-ghost">‹ 上一幕</button>
+          <button type="button" id="preview-next" class="btn btn-ghost">下一幕 ›</button>
+          <span class="preview-help">空格暂停 · ← → 切换镜头</span>
+        </div>
+      </footer>
+    </div>
+  </div>
+
+  <aside class="library-panel" id="library-panel" hidden>
+    <div class="library-header">
+      <div>
+        <span class="library-kicker" id="library-kicker">REFERENCE LIBRARY</span>
+        <h2 id="library-title">设定集</h2>
+      </div>
+      <button type="button" id="close-library" class="btn-icon" aria-label="关闭">×</button>
+    </div>
+    <p class="library-hint" id="library-hint">保存角色、场景、风格参考，出图时可重复使用</p>
+    <div class="library-toolbar">
+      <input type="search" id="library-search" class="library-search" placeholder="搜索设定…" />
+      <label class="btn btn-ghost upload-label library-upload">
+        + 上传
+        <input type="file" id="library-upload" accept="image/*" hidden />
+      </label>
+    </div>
+    <div class="library-grid" id="library-grid"></div>
+    <div class="library-footer" id="library-footer" hidden>
+      <span><strong id="library-selected-count">0</strong> 张参考图</span>
+      <button type="button" id="library-done-btn" class="btn btn-primary">完成选择</button>
+    </div>
+  </aside>
+  <div class="library-backdrop" id="library-backdrop" hidden></div>
+
+  <div class="modal-overlay" id="library-name-modal" hidden>
+    <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="library-name-title">
+      <h3 id="library-name-title">加入设定集</h3>
+      <label class="modal-field">
+        <span>名称</span>
+        <input type="text" id="library-name-input" placeholder="例如：主角形象、办公室场景" />
+      </label>
+      <div class="modal-actions">
+        <button type="button" id="library-name-cancel" class="btn btn-ghost">取消</button>
+        <button type="button" id="library-name-confirm" class="btn btn-primary">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="delete-modal" hidden>
+    <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-modal-title">
+      <h3 id="delete-modal-title">删除节点</h3>
+      <p id="delete-modal-body" class="modal-body"></p>
+      <div class="modal-actions">
+        <button type="button" id="delete-cancel" class="btn btn-ghost">取消</button>
+        <button type="button" id="delete-confirm" class="btn btn-danger">确认删除</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="undo-toast" id="undo-toast" hidden>
+    <span id="undo-message"></span>
+    <button type="button" id="undo-btn" class="btn btn-ghost btn-sm">撤销</button>
+  </div>
+
+  <script src="/app.js" type="module"></script>
+</body>
+</html>

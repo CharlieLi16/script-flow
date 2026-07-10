@@ -1,0 +1,8 @@
+node_modules/
+.env
+data/images/*
+!data/images/.gitkeep
+data/refs/*
+!data/refs/.gitkeep
+data/timeline.json
+data/library.json
