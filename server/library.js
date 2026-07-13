@@ -1,7 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { getImagesDir } from './store.js';
+import { imageFilePathFromUrl } from './store.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, '..', 'data');
@@ -55,11 +55,10 @@ export async function saveRefBuffer(buffer, ext = 'png') {
 
 export async function copyImageToRefs(imageUrl) {
   const filename = path.basename(imageUrl);
-  const imagesDir = getImagesDir();
-  let src = path.join(imagesDir, filename);
-  if (imageUrl.startsWith('/refs/')) {
-    src = path.join(REFS_DIR, filename);
-  }
+  const src = imageUrl.startsWith('/refs/')
+    ? path.join(REFS_DIR, filename)
+    : imageFilePathFromUrl(imageUrl);
+  if (!src) throw new Error('Only local images can be added to the reference library');
   const ext = path.extname(filename).slice(1) || 'png';
   const { id, imageUrl: newUrl } = await saveRefBuffer(await fs.readFile(src), ext);
   return { id, imageUrl: newUrl };
@@ -70,8 +69,10 @@ export async function loadImageFromUrl(imageUrl) {
     throw new Error('Invalid image URL');
   }
   const filename = path.basename(imageUrl);
-  const dir = imageUrl.startsWith('/refs/') ? REFS_DIR : getImagesDir();
-  const filepath = path.join(dir, filename);
+  const filepath = imageUrl.startsWith('/refs/')
+    ? path.join(REFS_DIR, filename)
+    : imageFilePathFromUrl(imageUrl);
+  if (!filepath) throw new Error('Unsupported image URL');
   const buffer = await fs.readFile(filepath);
   const ext = path.extname(filename).slice(1).toLowerCase();
   const mime =

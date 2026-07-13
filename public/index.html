@@ -38,8 +38,15 @@
 
     <main class="workspace">
       <section class="timeline-panel">
+        <header class="timeline-sidebar-header">
+          <div>
+            <span class="panel-kicker">SEQUENCE</span>
+            <h2>镜头时间线</h2>
+          </div>
+          <span id="timeline-node-count" class="timeline-node-count">0 幕</span>
+        </header>
         <div class="timeline-viewport">
-          <button type="button" id="scroll-left" class="scroll-nav scroll-nav-left" aria-label="向左滚动">‹</button>
+          <button type="button" id="scroll-left" class="scroll-nav scroll-nav-left" aria-label="向上滚动">⌃</button>
           <div class="timeline-scroll" id="timeline-scroll">
             <div class="timeline-track" id="timeline-track">
               <div class="axis">
@@ -50,64 +57,32 @@
               <div class="nodes-layer" id="nodes-layer"></div>
             </div>
           </div>
-          <button type="button" id="scroll-right" class="scroll-nav scroll-nav-right" aria-label="向右滚动">›</button>
+          <button type="button" id="scroll-right" class="scroll-nav scroll-nav-right" aria-label="向下滚动">⌄</button>
         </div>
-        <p class="timeline-hint">点击节点编辑剧情 · 拖拽排序 · 滚轮/边缘自动滚动 · 空白处双击添加节点</p>
+        <p class="timeline-hint">上下拖拽排序 · 双击空白添加</p>
       </section>
 
-      <aside class="editor-panel" id="editor-panel" hidden>
-        <div class="editor-header">
-          <h2>节点编辑</h2>
-          <button type="button" id="close-editor" class="btn-icon" aria-label="关闭">×</button>
-        </div>
+      <div class="panel-resizer panel-resizer-left" id="timeline-resizer" role="separator" aria-label="调整时间线宽度" aria-orientation="vertical" tabindex="0"></div>
 
-        <form id="node-form" class="editor-form">
-          <div class="node-basics">
-            <label>
-              <span>标题</span>
-              <input type="text" id="field-title" name="title" />
-            </label>
-            <label>
-              <span>时间</span>
-              <input type="text" id="field-time" name="timeLabel" placeholder="00:00" />
-            </label>
+      <section class="workbench-panel">
+        <header class="workbench-header">
+          <div>
+            <span class="panel-kicker">CURRENT SHOT</span>
+            <h2 id="workbench-title">选择一个镜头</h2>
           </div>
-          <div class="node-basics node-timing">
-            <label>
-              <span>画面时长</span>
-              <div class="input-suffix">
-                <input type="number" id="field-duration" name="durationMs" min="0.5" max="600" step="0.5" />
-                <em>秒</em>
-              </div>
-            </label>
-            <label>
-              <span>运镜</span>
-              <select id="field-camera" name="cameraPreset">
-                <option value="static">静止</option>
-                <option value="push">缓慢推进</option>
-                <option value="pull">缓慢拉远</option>
-                <option value="left">向左平移</option>
-                <option value="right">向右平移</option>
-                <option value="up">向上摇镜</option>
-                <option value="down">向下摇镜</option>
-              </select>
-            </label>
+          <div class="workbench-meta">
+            <span id="workbench-time">00:00</span>
+            <button type="button" id="workbench-preview-btn" class="btn btn-ghost btn-sm">▶ 动画预览</button>
           </div>
-          <label>
-            <span>剧情</span>
-            <textarea id="field-script" name="script" rows="4" placeholder="镜头、旁白、动作…"></textarea>
-          </label>
-          <label>
-            <span>字幕 / 台词</span>
-            <textarea id="field-subtitle" name="subtitle" rows="2" placeholder="预览时显示在画面底部…"></textarea>
-          </label>
+        </header>
 
-          <section class="image-section">
-            <div class="section-heading">
-              <h3>分镜图</h3>
+        <div class="workbench-canvas">
+          <div class="workbench-canvas-inner">
+            <div class="workbench-image-actions">
+              <span class="section-caption">STORYBOARD</span>
               <div class="image-actions">
                 <label class="btn btn-ghost btn-sm upload-label">
-                  上传
+                  上传图片
                   <input type="file" id="image-upload" accept="image/*" hidden />
                 </label>
                 <button type="button" id="add-to-library-btn" class="btn btn-ghost btn-sm" disabled>存入设定集</button>
@@ -115,7 +90,7 @@
             </div>
             <div class="image-preview-shell">
               <div class="image-preview" id="image-preview">
-                <span class="image-placeholder">暂无图片</span>
+                <span class="image-placeholder">从左侧选择镜头，或上传一张分镜图</span>
               </div>
               <div class="gen-progress-overlay" id="gen-progress-overlay" hidden aria-live="polite">
                 <div class="gen-progress-content">
@@ -128,10 +103,119 @@
                 </div>
               </div>
             </div>
-          </section>
 
-          <section class="gen-section">
-            <h3>AI 出图</h3>
+            <div class="flipbook-result" id="flipbook-result" hidden>
+              <div class="section-heading">
+                <h3>动画帧</h3>
+                <div class="flipbook-result-actions">
+                  <button type="button" id="save-flipbook-frame-btn" class="btn btn-ghost btn-sm">存当前帧</button>
+                  <button type="button" id="flipbook-play-btn" class="btn btn-ghost btn-sm">▶ 播放</button>
+                </div>
+              </div>
+              <div class="flipbook-frames" id="flipbook-frames-strip"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="prompt-composer">
+          <div class="prompt-field">
+            <div class="prompt-field-heading">
+              <label for="gen-prompt">Prompt</label>
+              <button type="button" id="prompt-library-btn" class="btn-text">提词库</button>
+            </div>
+            <textarea id="gen-prompt" rows="4" placeholder="描述画面、构图与光线… 输入 @ 引用图片"></textarea>
+            <div id="reference-mention-menu" class="reference-mention-menu" hidden></div>
+            <div id="prompt-reference-tags" class="prompt-reference-tags" hidden></div>
+          </div>
+          <div class="composer-footer">
+            <p id="gen-status" class="gen-status" hidden></p>
+            <div class="gen-actions">
+              <button type="button" id="fill-prompt-btn" class="btn btn-ghost">用剧情填充</button>
+              <button type="button" id="generate-btn" class="btn btn-primary">生成图片</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div class="panel-resizer panel-resizer-right" id="editor-resizer" role="separator" aria-label="调整参数面板宽度" aria-orientation="vertical" tabindex="0"></div>
+
+      <aside class="editor-panel" id="editor-panel" hidden>
+        <div class="editor-header">
+          <h2>节点编辑</h2>
+          <button type="button" id="close-editor" class="btn-icon" aria-label="关闭">×</button>
+        </div>
+
+        <form id="node-form" class="editor-form">
+          <details class="editor-section" open>
+            <summary class="editor-section-summary">
+              <span class="editor-section-index">01</span>
+              <span class="editor-section-title">
+                <strong>镜头信息</strong>
+                <small>标题、时长、剧情与台词</small>
+              </span>
+              <span class="editor-section-chevron" aria-hidden="true">⌄</span>
+            </summary>
+            <div class="editor-section-content">
+              <div class="node-basics">
+                <label>
+                  <span>标题</span>
+                  <input type="text" id="field-title" name="title" />
+                </label>
+                <label>
+                  <span>开始时间</span>
+                  <input type="text" id="field-start-time" readonly tabindex="-1" aria-live="polite" />
+                </label>
+              </div>
+              <label class="preview-toggle-row">
+                <span class="preview-toggle-copy">
+                  <strong>加入动画预览</strong>
+                  <small>关闭后作为记录保留，不参与播放</small>
+                </span>
+                <input type="checkbox" id="field-include-preview" name="includeInPreview" />
+                <span class="autosave-switch" aria-hidden="true"></span>
+              </label>
+              <div class="node-basics node-timing">
+                <label>
+                  <span>画面时长</span>
+                  <div class="input-suffix">
+                    <input type="number" id="field-duration" name="durationMs" min="0.5" max="600" step="0.5" />
+                    <em>秒</em>
+                  </div>
+                </label>
+                <label>
+                  <span>运镜</span>
+                  <select id="field-camera" name="cameraPreset">
+                    <option value="static">静止</option>
+                    <option value="push">缓慢推进</option>
+                    <option value="pull">缓慢拉远</option>
+                    <option value="left">向左平移</option>
+                    <option value="right">向右平移</option>
+                    <option value="up">向上摇镜</option>
+                    <option value="down">向下摇镜</option>
+                  </select>
+                </label>
+              </div>
+              <label>
+                <span>剧情</span>
+                <textarea id="field-script" name="script" rows="4" placeholder="镜头、旁白、动作…"></textarea>
+              </label>
+              <label>
+                <span>字幕 / 台词</span>
+                <textarea id="field-subtitle" name="subtitle" rows="2" placeholder="预览时显示在画面底部…"></textarea>
+              </label>
+            </div>
+          </details>
+
+          <details class="editor-section gen-section" open>
+            <summary class="editor-section-summary">
+              <span class="editor-section-index">02</span>
+              <span class="editor-section-title">
+                <strong>生成参数</strong>
+                <small>参考图、模型与动画设置</small>
+              </span>
+              <span class="editor-section-chevron" aria-hidden="true">⌄</span>
+            </summary>
+            <div class="editor-section-content">
 
             <div class="ref-section">
               <div class="ref-header">
@@ -160,30 +244,83 @@
 
             <div class="gen-settings">
               <label>
+                <span>模式</span>
+                <select id="gen-mode">
+                  <option value="single">单张</option>
+                  <option value="flipbook">翻页动画</option>
+                  <option value="interpolate32">8 帧关键帧 → 32 帧</option>
+                  <option value="chain32">32 帧接力</option>
+                </select>
+              </label>
+              <label>
                 <span>模型</span>
                 <select id="gen-provider" disabled>
                   <option value="">加载中…</option>
                 </select>
               </label>
+            </div>
+
+            <div class="gen-settings">
               <label>
                 <span>尺寸</span>
                 <select id="gen-size">
                   <option value="1024x1024">1:1</option>
-                  <option value="1792x1024">16:9</option>
+                  <option value="1792x1024" selected>16:9</option>
                   <option value="1024x1792">9:16</option>
                 </select>
               </label>
+              <label id="flipbook-frames-label" hidden>
+                <span>帧数</span>
+                <select id="flipbook-frames">
+                  <option value="4">4（2×2）</option>
+                  <option value="8">8（4×2）</option>
+                  <option value="16">16（4×4）</option>
+                </select>
+              </label>
             </div>
-            <label>
-              <span>Prompt</span>
-              <textarea id="gen-prompt" rows="3" placeholder="画面、构图、光线…"></textarea>
-            </label>
-            <div class="gen-actions">
-              <button type="button" id="fill-prompt-btn" class="btn btn-ghost">用剧情填充</button>
-              <button type="button" id="generate-btn" class="btn btn-primary">生成图片</button>
+
+            <div class="flipbook-controls" id="flipbook-controls" hidden>
+              <div class="gen-settings">
+                <label>
+                  <span>FPS</span>
+                  <input type="number" id="flipbook-fps" min="1" max="30" step="1" value="4" />
+                </label>
+                <div class="flipbook-template-meta">
+                  <span class="ref-label">提词模板</span>
+                  <strong id="flipbook-template-name">未选择</strong>
+                  <button type="button" id="flipbook-pick-template-btn" class="btn-text">选用模板</button>
+                </div>
+              </div>
+              <p class="flipbook-grid-hint" id="flipbook-grid-hint">网格 2×2 · 裁切后按序播放</p>
+              <p class="flipbook-clarity-hint" id="flipbook-clarity-hint" hidden></p>
+              <div class="chain32-controls" id="chain32-controls" hidden>
+                <div class="chain32-progress" id="chain32-progress">
+                  <span>1</span><span>2</span><span>3</span><span>4</span>
+                </div>
+                <p>每段生成 8 个新画面；上一段尾帧会自动作为下一段的连续性参考。</p>
+                <div class="chain32-prompts">
+                  <label><span>第 1 段</span><input class="chain32-segment-prompt" type="text" placeholder="起始动作（可选）" /></label>
+                  <label><span>第 2 段</span><input class="chain32-segment-prompt" type="text" placeholder="动作继续（可选）" /></label>
+                  <label><span>第 3 段</span><input class="chain32-segment-prompt" type="text" placeholder="进一步变化（可选）" /></label>
+                  <label><span>第 4 段</span><input class="chain32-segment-prompt" type="text" placeholder="收尾动作（可选）" /></label>
+                </div>
+              </div>
+              <div class="interpolation-controls" id="interpolation-controls" hidden>
+                <div class="interpolation-progress" id="interpolation-progress">
+                  <span>关键帧</span>
+                  <span>1→2</span><span>2→3</span><span>3→4</span><span>4→5</span>
+                  <span>5→6</span><span>6→7</span><span>7→8</span>
+                </div>
+                <p>阶段 1 生成 8 个关键帧；阶段 2 并行补齐相邻关键帧之间的画面，最终输出 32 帧。</p>
+              </div>
+              <details class="flipbook-final-prompt">
+                <summary>最终 Prompt 预览</summary>
+                <pre id="flipbook-final-preview"></pre>
+              </details>
             </div>
-            <p id="gen-status" class="gen-status" hidden></p>
-          </section>
+
+            </div>
+          </details>
 
         </form>
       </aside>
@@ -259,6 +396,31 @@
   </aside>
   <div class="library-backdrop" id="library-backdrop" hidden></div>
 
+  <aside class="prompt-library-panel" id="prompt-library-panel" hidden>
+    <div class="library-header">
+      <div>
+        <span class="library-kicker">PROMPT LIBRARY</span>
+        <h2>提词库</h2>
+      </div>
+      <button type="button" id="close-prompt-library" class="btn-icon" aria-label="关闭">×</button>
+    </div>
+    <div class="prompt-library-toolbar">
+      <input type="search" id="prompt-library-search" class="library-search" placeholder="搜索提词…" />
+      <button type="button" id="new-prompt-btn" class="btn btn-ghost btn-sm">+ 新建</button>
+      <button type="button" id="save-current-prompt-btn" class="btn btn-primary btn-sm">保存当前</button>
+    </div>
+    <form id="prompt-library-form" class="prompt-library-form" hidden>
+      <input type="text" id="prompt-library-name" placeholder="提词名称" maxlength="80" />
+      <textarea id="prompt-library-content" rows="6" placeholder="输入 Prompt 内容…"></textarea>
+      <div class="prompt-library-form-actions">
+        <button type="button" id="cancel-prompt-edit-btn" class="btn btn-ghost btn-sm">取消</button>
+        <button type="submit" class="btn btn-primary btn-sm">保存</button>
+      </div>
+    </form>
+    <div class="prompt-library-list" id="prompt-library-list"></div>
+  </aside>
+  <div class="prompt-library-backdrop" id="prompt-library-backdrop" hidden></div>
+
   <div class="modal-overlay" id="library-name-modal" hidden>
     <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="library-name-title">
       <h3 id="library-name-title">加入设定集</h3>
@@ -282,6 +444,11 @@
         <button type="button" id="delete-confirm" class="btn btn-danger">确认删除</button>
       </div>
     </div>
+  </div>
+
+  <div class="modal-overlay lightbox-overlay" id="image-lightbox" hidden>
+    <button type="button" class="lightbox-close" id="lightbox-close" aria-label="关闭">×</button>
+    <img id="lightbox-image" alt="" />
   </div>
 
   <div class="undo-toast" id="undo-toast" hidden>

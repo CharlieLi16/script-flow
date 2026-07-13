@@ -13,22 +13,22 @@ function mimeToExt(mime) {
 function buildParts(references, prompt) {
   const parts = [];
 
-  for (const ref of references) {
+  references.forEach((ref, index) => {
+    parts.push({
+      text: `Reference image @${index + 1}:`,
+    });
     parts.push({
       inline_data: {
         mime_type: ref.mime,
         data: ref.buffer.toString('base64'),
       },
     });
-  }
-
-  const refHint =
-    references.length > 0
-      ? `Using the ${references.length} reference image(s) above for style, characters, and composition. `
-      : '';
+  });
 
   parts.push({
-    text: `${refHint}Generate an image: ${prompt}`,
+    text: references.length
+      ? `In the prompt below, @1 through @${references.length} refer to the correspondingly numbered reference images above. Follow those references precisely.\n\nGenerate an image: ${prompt}`
+      : `Generate an image: ${prompt}`,
   });
 
   return parts;

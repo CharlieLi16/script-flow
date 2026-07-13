@@ -21,6 +21,7 @@ npm start
 - 顶部保存/删除操作，支持 `Ctrl+S`（macOS 为 `⌘S`）和可记忆的自动保存开关
 - 右上角「预览」：按节点时长播放 animatic，支持字幕、运镜预设、暂停、跳转
 - 上传分镜图，或选模型 → 选参考图 → 写 prompt → 生成
+- **翻页动画**：选 4/8/16 帧 → 从提词库套用模板 → 生成分镜表 → 后端裁切 → 按 FPS 播放（见 [docs/flipbook-prompt.md](docs/flipbook-prompt.md)）
 - **设定集**：保存角色/场景参考图，出图时重复使用；支持参考图 input（Gemini 多图 / OpenAI 图生图）
 - 拖拽节点排序
 - 数据保存在 `data/timeline.json` 和 `data/images/`

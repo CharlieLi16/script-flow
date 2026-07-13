@@ -20,16 +20,19 @@ export const openaiProvider = {
     let response;
 
     if (references.length > 0 && modelId !== 'dall-e-3') {
-      const imageFile = await toFile(references[0].buffer, 'reference.png', {
-        type: references[0].mime,
-      });
+      const imageFiles = await Promise.all(
+        references.map((reference, index) =>
+          toFile(reference.buffer, `reference-${index + 1}.png`, {
+            type: reference.mime,
+          }),
+        ),
+      );
       const refNote =
-        references.length > 1
-          ? ` Use the style and elements from ${references.length} reference images.`
-          : ' Match the reference image style and composition.';
+        ` Reference images are ordered @1 through @${references.length}. ` +
+        'Each @number in the prompt refers to the image at that position.';
       response = await client.images.edit({
         model: modelId,
-        image: imageFile,
+        image: imageFiles,
         prompt: prompt + refNote,
         size,
         n: 1,
