@@ -21,6 +21,8 @@
         <button type="button" id="theme-toggle" class="btn-icon theme-toggle" aria-label="切换浅色模式" title="切换主题">
           <span class="theme-icon" aria-hidden="true">☀</span>
         </button>
+        <button type="button" id="caption-track-btn" class="btn btn-ghost">字幕轨</button>
+        <button type="button" id="generated-assets-btn" class="btn btn-ghost">素材仓库</button>
         <button type="button" id="library-btn" class="btn btn-ghost">设定集管理</button>
         <button type="button" id="preview-btn" class="btn btn-preview">▶ 预览</button>
         <div class="topbar-node-actions">
@@ -89,7 +91,7 @@
               </div>
             </div>
             <div class="image-preview-shell">
-              <div class="image-preview" id="image-preview">
+              <div class="image-preview is-empty" id="image-preview">
                 <span class="image-placeholder">从左侧选择镜头，或上传一张分镜图</span>
               </div>
               <div class="gen-progress-overlay" id="gen-progress-overlay" hidden aria-live="polite">
@@ -199,10 +201,10 @@
                 <span>剧情</span>
                 <textarea id="field-script" name="script" rows="4" placeholder="镜头、旁白、动作…"></textarea>
               </label>
-              <label>
-                <span>字幕 / 台词</span>
-                <textarea id="field-subtitle" name="subtitle" rows="2" placeholder="预览时显示在画面底部…"></textarea>
-              </label>
+              <div class="node-caption-link">
+                <span>字幕已独立于镜头节点，可单独调整出现时间。</span>
+                <button type="button" id="open-caption-track-editor" class="btn btn-ghost btn-sm">打开字幕轨</button>
+              </div>
             </div>
           </details>
 
@@ -248,8 +250,7 @@
                 <select id="gen-mode">
                   <option value="single">单张</option>
                   <option value="flipbook">翻页动画</option>
-                  <option value="interpolate32">8 帧关键帧 → 32 帧</option>
-                  <option value="chain32">32 帧接力</option>
+                  <option value="chain32">32 帧锚点接力</option>
                 </select>
               </label>
               <label>
@@ -273,7 +274,7 @@
                 <span>帧数</span>
                 <select id="flipbook-frames">
                   <option value="4">4（2×2）</option>
-                  <option value="8">8（4×2）</option>
+                  <option value="8">8（3×3，去首格）</option>
                   <option value="16">16（4×4）</option>
                 </select>
               </label>
@@ -283,7 +284,7 @@
               <div class="gen-settings">
                 <label>
                   <span>FPS</span>
-                  <input type="number" id="flipbook-fps" min="1" max="30" step="1" value="4" />
+                  <input type="number" id="flipbook-fps" min="1" max="32" step="1" value="4" />
                 </label>
                 <div class="flipbook-template-meta">
                   <span class="ref-label">提词模板</span>
@@ -294,24 +295,26 @@
               <p class="flipbook-grid-hint" id="flipbook-grid-hint">网格 2×2 · 裁切后按序播放</p>
               <p class="flipbook-clarity-hint" id="flipbook-clarity-hint" hidden></p>
               <div class="chain32-controls" id="chain32-controls" hidden>
+                <p class="chain32-help">
+                  参考图 <strong>@1 = 首帧 K0</strong>，<strong>@2 = 尾帧 K4</strong>。
+                  先并行生成 K1/K2/K3，确认后再并行生成四段动画。
+                </p>
+                <div class="chain32-keyframes" id="chain32-keyframes"></div>
+                <div class="chain32-keyframe-actions">
+                  <button type="button" id="chain32-confirm-btn" class="btn btn-primary btn-sm" disabled>
+                    确认关键帧并生成四段
+                  </button>
+                  <span id="chain32-phase-label" class="chain32-phase-label">等待首尾参考图</span>
+                </div>
                 <div class="chain32-progress" id="chain32-progress">
                   <span>1</span><span>2</span><span>3</span><span>4</span>
                 </div>
-                <p>每段生成 8 个新画面；上一段尾帧会自动作为下一段的连续性参考。</p>
                 <div class="chain32-prompts">
-                  <label><span>第 1 段</span><input class="chain32-segment-prompt" type="text" placeholder="起始动作（可选）" /></label>
-                  <label><span>第 2 段</span><input class="chain32-segment-prompt" type="text" placeholder="动作继续（可选）" /></label>
-                  <label><span>第 3 段</span><input class="chain32-segment-prompt" type="text" placeholder="进一步变化（可选）" /></label>
-                  <label><span>第 4 段</span><input class="chain32-segment-prompt" type="text" placeholder="收尾动作（可选）" /></label>
+                  <label><span>K0→K1</span><input class="chain32-segment-prompt" type="text" placeholder="缓慢准备（可选）" /></label>
+                  <label><span>K1→K2</span><input class="chain32-segment-prompt" type="text" placeholder="开始加速（可选）" /></label>
+                  <label><span>K2→K3</span><input class="chain32-segment-prompt" type="text" placeholder="主要动作（可选）" /></label>
+                  <label><span>K3→K4</span><input class="chain32-segment-prompt" type="text" placeholder="减速收尾（可选）" /></label>
                 </div>
-              </div>
-              <div class="interpolation-controls" id="interpolation-controls" hidden>
-                <div class="interpolation-progress" id="interpolation-progress">
-                  <span>关键帧</span>
-                  <span>1→2</span><span>2→3</span><span>3→4</span><span>4→5</span>
-                  <span>5→6</span><span>6→7</span><span>7→8</span>
-                </div>
-                <p>阶段 1 生成 8 个关键帧；阶段 2 并行补齐相邻关键帧之间的画面，最终输出 32 帧。</p>
               </div>
               <details class="flipbook-final-prompt">
                 <summary>最终 Prompt 预览</summary>
@@ -396,6 +399,90 @@
   </aside>
   <div class="library-backdrop" id="library-backdrop" hidden></div>
 
+  <aside class="generated-assets-panel" id="generated-assets-panel" hidden>
+    <div class="library-header">
+      <div>
+        <span class="library-kicker">ASSET LIBRARY</span>
+        <h2>素材仓库</h2>
+      </div>
+      <button type="button" id="close-generated-assets" class="btn-icon" aria-label="关闭">×</button>
+    </div>
+    <p class="library-hint">存放全部生成结果。动画可在封面直接预览；设定集只放可复用的参考图。</p>
+    <div class="generated-assets-toolbar">
+      <input type="search" id="generated-assets-search" class="library-search" placeholder="搜索素材或 Prompt…" />
+      <select id="generated-assets-filter" aria-label="素材类型">
+        <option value="all">全部</option>
+        <option value="image">图片</option>
+        <option value="animation">动画</option>
+      </select>
+    </div>
+    <div class="generated-assets-grid" id="generated-assets-grid"></div>
+  </aside>
+  <div class="generated-assets-backdrop" id="generated-assets-backdrop" hidden></div>
+
+  <aside class="caption-track-panel" id="caption-track-panel" hidden>
+    <div class="library-header">
+      <div>
+        <span class="library-kicker">CAPTION TRACK</span>
+        <h2>独立字幕轨</h2>
+      </div>
+      <button type="button" id="close-caption-track" class="btn-icon" aria-label="关闭">×</button>
+    </div>
+    <p class="library-hint">画面、镜头和字幕共用同一个播放头；Ctrl/⌘ + 滚轮可缩放轨道进行微调。</p>
+    <div class="caption-workbench-preview" id="caption-preview-stage">
+      <img id="caption-preview-image" alt="" hidden />
+      <div class="caption-preview-empty" id="caption-preview-empty">当前时间没有画面</div>
+      <div class="caption-preview-text" id="caption-preview-text" hidden></div>
+      <div class="caption-preview-node" id="caption-preview-node"></div>
+    </div>
+    <div class="caption-playback-controls">
+      <button type="button" id="caption-play-btn" class="btn btn-primary btn-sm">▶ 播放</button>
+      <button type="button" id="caption-jump-selected-btn" class="btn btn-ghost btn-sm">定位所选字幕</button>
+      <span><strong id="caption-current-time">00:00.00</strong> / <span id="caption-total-time">00:00.00</span></span>
+    </div>
+    <div class="caption-track-toolbar">
+      <button type="button" id="add-caption-btn" class="btn btn-primary btn-sm">+ 添加字幕</button>
+      <div class="caption-zoom-controls">
+        <button type="button" id="caption-zoom-fit" class="btn btn-ghost btn-sm">适应</button>
+        <button type="button" id="caption-zoom-out" class="btn-icon" aria-label="缩小字幕轨">−</button>
+        <input type="range" id="caption-zoom" min="1" max="20" step="1" value="1" aria-label="字幕轨缩放" />
+        <button type="button" id="caption-zoom-in" class="btn-icon" aria-label="放大字幕轨">+</button>
+        <strong id="caption-zoom-label">1×</strong>
+      </div>
+      <span id="caption-track-summary">0 条字幕</span>
+    </div>
+    <div class="caption-track-scroll" id="caption-track-scroll">
+      <div class="caption-track-canvas" id="caption-track-canvas">
+        <div class="caption-ruler" id="caption-ruler"></div>
+        <div class="caption-shot-lane" id="caption-shot-lane"></div>
+        <div class="caption-lane" id="caption-lane"></div>
+        <div class="caption-playhead" id="caption-playhead" aria-hidden="true"><span></span></div>
+      </div>
+    </div>
+    <form class="caption-editor" id="caption-editor" hidden>
+      <label>
+        <span>字幕内容</span>
+        <textarea id="caption-text" rows="3" placeholder="输入字幕或台词…"></textarea>
+      </label>
+      <div class="caption-time-fields">
+        <label>
+          <span>开始（秒）</span>
+          <input type="number" id="caption-start" min="0" step="0.05" />
+        </label>
+        <label>
+          <span>结束（秒）</span>
+          <input type="number" id="caption-end" min="0.1" step="0.05" />
+        </label>
+      </div>
+      <div class="caption-editor-actions">
+        <button type="button" id="delete-caption-btn" class="btn btn-danger btn-sm">删除字幕</button>
+        <button type="submit" class="btn btn-primary btn-sm">保存修改</button>
+      </div>
+    </form>
+    <p class="caption-track-empty" id="caption-track-empty">还没有字幕，点击“添加字幕”开始。</p>
+  </aside>
+  <div class="caption-track-backdrop" id="caption-track-backdrop" hidden></div>
+
   <aside class="prompt-library-panel" id="prompt-library-panel" hidden>
     <div class="library-header">
       <div>
@@ -431,6 +518,21 @@
       <div class="modal-actions">
         <button type="button" id="library-name-cancel" class="btn btn-ghost">取消</button>
         <button type="button" id="library-name-confirm" class="btn btn-primary">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="app-dialog" hidden>
+    <div class="modal-dialog app-dialog" role="dialog" aria-modal="true" aria-labelledby="app-dialog-title" aria-describedby="app-dialog-message">
+      <h3 id="app-dialog-title">确认操作</h3>
+      <p id="app-dialog-message" class="modal-body app-dialog-message"></p>
+      <label class="modal-field app-dialog-field" id="app-dialog-field" hidden>
+        <span id="app-dialog-field-label">名称</span>
+        <input type="text" id="app-dialog-input" autocomplete="off" />
+      </label>
+      <div class="modal-actions">
+        <button type="button" id="app-dialog-cancel" class="btn btn-ghost">取消</button>
+        <button type="button" id="app-dialog-confirm" class="btn btn-primary">确认</button>
       </div>
     </div>
   </div>

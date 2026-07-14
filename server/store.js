@@ -14,6 +14,7 @@ let timelineMutationQueue = Promise.resolve();
 const DEFAULT_TIMELINE = {
   title: 'Demo 视频剧本',
   nodes: [],
+  captions: [],
 };
 
 export function getImagesDir() {
@@ -90,6 +91,10 @@ export function createNodeId() {
   return `n${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 }
 
+export function createCaptionId() {
+  return `caption${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+}
+
 export async function saveImageBuffer(nodeId, buffer, ext = 'png') {
   await ensureDataDir();
   const filename = `${nodeId}-${Date.now()}.${ext}`;
@@ -115,13 +120,38 @@ export function nodeImageAssetUrls(node) {
   const urls = new Set();
   if (node?.imageUrl?.startsWith('/images/')) urls.add(node.imageUrl);
   if (node?.animation?.sourceUrl?.startsWith('/images/')) urls.add(node.animation.sourceUrl);
+  for (const url of node?.animation?.sourceUrls || []) {
+    if (url?.startsWith('/images/')) urls.add(url);
+  }
   for (const url of node?.animation?.frameUrls || []) {
     if (url?.startsWith('/images/')) urls.add(url);
   }
+  for (const batch of node?.animation?.batches || []) {
+    if (!batch) continue;
+    if (batch?.sourceUrl?.startsWith('/images/')) urls.add(batch.sourceUrl);
+    if (batch?.anchorUrl?.startsWith('/images/')) urls.add(batch.anchorUrl);
+    for (const url of batch?.frameUrls || []) {
+      if (url?.startsWith('/images/')) urls.add(url);
+    }
+  }
   for (const segment of node?.animation?.segments || []) {
+    if (!segment) continue;
     if (segment?.sourceUrl?.startsWith('/images/')) urls.add(segment.sourceUrl);
+    for (const url of segment?.sourceUrls || []) {
+      if (url?.startsWith('/images/')) urls.add(url);
+    }
+    if (segment?.anchorUrl?.startsWith('/images/')) urls.add(segment.anchorUrl);
+    if (segment?.startAnchorUrl?.startsWith('/images/')) urls.add(segment.startAnchorUrl);
+    if (segment?.endAnchorUrl?.startsWith('/images/')) urls.add(segment.endAnchorUrl);
     for (const url of segment?.frameUrls || []) {
       if (url?.startsWith('/images/')) urls.add(url);
+    }
+    for (const batch of segment?.batches || []) {
+      if (batch?.sourceUrl?.startsWith('/images/')) urls.add(batch.sourceUrl);
+      if (batch?.anchorUrl?.startsWith('/images/')) urls.add(batch.anchorUrl);
+      for (const url of batch?.frameUrls || []) {
+        if (url?.startsWith('/images/')) urls.add(url);
+      }
     }
   }
   if (node?.animation?.keyframeSourceUrl?.startsWith('/images/')) {
@@ -169,22 +199,6 @@ export async function cleanupImageAssets(candidates, referencedUrls = new Set())
     });
   }
   return deleted;
-}
-
-export const INTERPOLATION_KEEP_COUNTS = [4, 3, 3, 4, 3, 3, 4];
-
-export function assembleInterpolatedFrames(keyframeUrls, interpolations) {
-  if (!Array.isArray(keyframeUrls) || keyframeUrls.length !== 8) {
-    throw new Error('Interpolation workflow requires exactly 8 keyframes');
-  }
-  const frames = [];
-  for (let index = 0; index < keyframeUrls.length; index += 1) {
-    frames.push(keyframeUrls[index]);
-    if (index >= keyframeUrls.length - 1) continue;
-    const generated = interpolations?.[index]?.frameUrls || [];
-    frames.push(...generated.slice(0, INTERPOLATION_KEEP_COUNTS[index]));
-  }
-  return frames;
 }
 
 function axisBounds(length, count) {

@@ -6,3 +6,4 @@ data/refs/*
 !data/refs/.gitkeep
 data/timeline.json
 data/library.json
+data/generated-assets.json

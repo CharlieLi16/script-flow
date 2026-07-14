@@ -6,7 +6,7 @@ const SCROLL_MAX_SPEED = 22;
 const GENERATE_TIMEOUT_MS = 180000;
 
 const state = {
-  timeline: { title: '', nodes: [] },
+  timeline: { title: '', nodes: [], captions: [] },
   selectedId: null,
   providers: [],
   dragId: null,
@@ -16,8 +16,19 @@ const state = {
   autoScrollRaf: null,
   pendingDelete: null,
   library: { items: [] },
+  generatedAssets: { items: [] },
   genRefs: {},
   pendingLibraryImageUrl: null,
+  pendingLibraryTarget: 'library',
+  pendingLibraryMetadata: null,
+  expandedGeneratedAssets: new Set(),
+  assetPreview: {
+    assetId: null,
+    playing: false,
+    index: 0,
+    rafId: null,
+    startedAt: 0,
+  },
   libraryMode: 'manage',
   promptLibrary: { items: [] },
   editingPromptId: null,
@@ -33,6 +44,8 @@ const state = {
     previewPlaying: false,
     previewIndex: 0,
     previewTimer: null,
+    keyframeStatus: {},
+    segmentStatus: {},
   },
   preview: {
     open: false,
@@ -41,6 +54,16 @@ const state = {
     currentIndex: 0,
     startedAt: 0,
     rafId: null,
+  },
+  captionTrack: {
+    selectedId: null,
+    saveTimer: null,
+    drag: null,
+    elapsed: 0,
+    playing: false,
+    startedAt: 0,
+    rafId: null,
+    zoom: Math.min(20, Math.max(1, Number(localStorage.getItem('script-flow-caption-zoom')) || 1)),
   },
 };
 
@@ -77,7 +100,7 @@ const els = {
   fieldDuration: $('#field-duration'),
   fieldCamera: $('#field-camera'),
   fieldScript: $('#field-script'),
-  fieldSubtitle: $('#field-subtitle'),
+  openCaptionTrackEditor: $('#open-caption-track-editor'),
   imagePreviewShell: $('.image-preview-shell'),
   imagePreview: $('#image-preview'),
   imageUpload: $('#image-upload'),
@@ -96,9 +119,10 @@ const els = {
   flipbookFinalPreview: $('#flipbook-final-preview'),
   chain32Controls: $('#chain32-controls'),
   chain32Progress: $('#chain32-progress'),
+  chain32Keyframes: $('#chain32-keyframes'),
+  chain32ConfirmBtn: $('#chain32-confirm-btn'),
+  chain32PhaseLabel: $('#chain32-phase-label'),
   chain32SegmentPrompts: [...document.querySelectorAll('.chain32-segment-prompt')],
-  interpolationControls: $('#interpolation-controls'),
-  interpolationProgress: $('#interpolation-progress'),
   flipbookResult: $('#flipbook-result'),
   flipbookFramesStrip: $('#flipbook-frames-strip'),
   saveFlipbookFrameBtn: $('#save-flipbook-frame-btn'),
@@ -130,6 +154,45 @@ const els = {
   refChips: $('#ref-chips'),
   refUpload: $('#ref-upload'),
   libraryBtn: $('#library-btn'),
+  generatedAssetsBtn: $('#generated-assets-btn'),
+  generatedAssetsPanel: $('#generated-assets-panel'),
+  generatedAssetsBackdrop: $('#generated-assets-backdrop'),
+  closeGeneratedAssets: $('#close-generated-assets'),
+  generatedAssetsSearch: $('#generated-assets-search'),
+  generatedAssetsFilter: $('#generated-assets-filter'),
+  generatedAssetsGrid: $('#generated-assets-grid'),
+  captionTrackBtn: $('#caption-track-btn'),
+  captionTrackPanel: $('#caption-track-panel'),
+  captionTrackBackdrop: $('#caption-track-backdrop'),
+  closeCaptionTrack: $('#close-caption-track'),
+  addCaptionBtn: $('#add-caption-btn'),
+  captionTrackSummary: $('#caption-track-summary'),
+  captionTrackScroll: $('#caption-track-scroll'),
+  captionTrackCanvas: $('#caption-track-canvas'),
+  captionRuler: $('#caption-ruler'),
+  captionShotLane: $('#caption-shot-lane'),
+  captionLane: $('#caption-lane'),
+  captionPlayhead: $('#caption-playhead'),
+  captionPreviewStage: $('#caption-preview-stage'),
+  captionPreviewImage: $('#caption-preview-image'),
+  captionPreviewEmpty: $('#caption-preview-empty'),
+  captionPreviewText: $('#caption-preview-text'),
+  captionPreviewNode: $('#caption-preview-node'),
+  captionPlayBtn: $('#caption-play-btn'),
+  captionJumpSelectedBtn: $('#caption-jump-selected-btn'),
+  captionCurrentTime: $('#caption-current-time'),
+  captionTotalTime: $('#caption-total-time'),
+  captionZoom: $('#caption-zoom'),
+  captionZoomFit: $('#caption-zoom-fit'),
+  captionZoomOut: $('#caption-zoom-out'),
+  captionZoomIn: $('#caption-zoom-in'),
+  captionZoomLabel: $('#caption-zoom-label'),
+  captionEditor: $('#caption-editor'),
+  captionText: $('#caption-text'),
+  captionStart: $('#caption-start'),
+  captionEnd: $('#caption-end'),
+  deleteCaptionBtn: $('#delete-caption-btn'),
+  captionTrackEmpty: $('#caption-track-empty'),
   libraryPanel: $('#library-panel'),
   libraryBackdrop: $('#library-backdrop'),
   closeLibrary: $('#close-library'),
@@ -143,9 +206,18 @@ const els = {
   librarySelectedCount: $('#library-selected-count'),
   libraryDoneBtn: $('#library-done-btn'),
   libraryNameModal: $('#library-name-modal'),
+  libraryNameTitle: $('#library-name-title'),
   libraryNameInput: $('#library-name-input'),
   libraryNameCancel: $('#library-name-cancel'),
   libraryNameConfirm: $('#library-name-confirm'),
+  appDialog: $('#app-dialog'),
+  appDialogTitle: $('#app-dialog-title'),
+  appDialogMessage: $('#app-dialog-message'),
+  appDialogField: $('#app-dialog-field'),
+  appDialogFieldLabel: $('#app-dialog-field-label'),
+  appDialogInput: $('#app-dialog-input'),
+  appDialogCancel: $('#app-dialog-cancel'),
+  appDialogConfirm: $('#app-dialog-confirm'),
   promptLibraryBtn: $('#prompt-library-btn'),
   promptLibraryPanel: $('#prompt-library-panel'),
   promptLibraryBackdrop: $('#prompt-library-backdrop'),
@@ -180,9 +252,38 @@ const els = {
 
 const FLIPBOOK_LAYOUTS = {
   4: { columns: 2, rows: 2 },
-  8: { columns: 4, rows: 2 },
+  8: {
+    columns: 3,
+    rows: 3,
+    sheetFrameCount: 9,
+    outputFrameCount: 8,
+    dropLeadingFrame: true,
+  },
+  9: { columns: 3, rows: 3 },
   16: { columns: 4, rows: 4 },
 };
+
+const PROMPT_ROLE_LABELS = {
+  general: '单图提词',
+  flipbook: '翻页图集',
+  'anchored-keyframe': '锚点关键帧',
+  'anchored-segment': '锚点分段',
+};
+
+const DEFAULT_PROMPT_MODE_MAP = {
+  single: { requiredRoles: [], selectableRoles: ['general'] },
+  flipbook: { requiredRoles: ['flipbook'], selectableRoles: ['flipbook'] },
+  chain32: {
+    requiredRoles: ['flipbook', 'anchored-keyframe', 'anchored-segment'],
+    selectableRoles: ['flipbook'],
+  },
+};
+
+const SYSTEM_PROMPT_IDS = new Set([
+  'pflipbook-default',
+  'panchored-keyframe',
+  'panchored-segment',
+]);
 
 async function api(path, options = {}) {
   let res;
@@ -202,6 +303,57 @@ async function api(path, options = {}) {
     throw new Error(data.error || `服务器请求失败（${res.status}）`);
   }
   return data;
+}
+
+let appDialogSession = null;
+
+function closeAppDialog(value = null) {
+  if (!appDialogSession) return;
+  const session = appDialogSession;
+  appDialogSession = null;
+  els.appDialog.hidden = true;
+  els.appDialogInput.value = '';
+  session.resolve(value);
+  session.returnFocus?.focus?.();
+}
+
+function openAppDialog({
+  title,
+  message = '',
+  confirmLabel = '确认',
+  tone = 'primary',
+  input = null,
+}) {
+  if (appDialogSession) closeAppDialog(null);
+  els.appDialogTitle.textContent = title;
+  els.appDialogMessage.textContent = message;
+  els.appDialogMessage.hidden = !message;
+  els.appDialogField.hidden = !input;
+  els.appDialogFieldLabel.textContent = input?.label || '名称';
+  els.appDialogInput.placeholder = input?.placeholder || '';
+  els.appDialogInput.value = input?.value || '';
+  els.appDialogConfirm.textContent = confirmLabel;
+  els.appDialogConfirm.className = `btn ${tone === 'danger' ? 'btn-danger' : 'btn-primary'}`;
+  els.appDialog.hidden = false;
+
+  const returnFocus = document.activeElement;
+  const promise = new Promise((resolve) => {
+    appDialogSession = { resolve, input: Boolean(input), returnFocus };
+  });
+  requestAnimationFrame(() => {
+    if (input) {
+      els.appDialogInput.focus();
+      els.appDialogInput.select();
+    } else {
+      els.appDialogConfirm.focus();
+    }
+  });
+  return promise;
+}
+
+function confirmAppDialog() {
+  if (!appDialogSession) return;
+  closeAppDialog(appDialogSession.input ? els.appDialogInput.value : true);
 }
 
 function selectedNode() {
@@ -225,10 +377,11 @@ function nodeDuration(node) {
 
 function nodeAnimation(node = selectedNode()) {
   const animation = node?.animation;
-  if (!animation || !Array.isArray(animation.frameUrls) || animation.frameUrls.length === 0) {
-    return null;
-  }
-  return animation;
+  if (!animation || typeof animation !== 'object') return null;
+  if (Array.isArray(animation.frameUrls) && animation.frameUrls.length > 0) return animation;
+  if (animation.mode === 'anchored-chain32' || animation.mode === 'chain32') return animation;
+  if (Array.isArray(animation.keyframeUrls) && animation.keyframeUrls.some(Boolean)) return animation;
+  return null;
 }
 
 function flipbookLayout(frameCount = Number(els.flipbookFrames.value)) {
@@ -238,16 +391,174 @@ function flipbookLayout(frameCount = Number(els.flipbookFrames.value)) {
 function normalizeFps(value, fallback = 4) {
   const fps = Number(value);
   if (!Number.isFinite(fps)) return fallback;
-  return Math.min(30, Math.max(1, Math.round(fps)));
+  return Math.min(32, Math.max(1, Math.round(fps)));
 }
 
-function fillFlipbookTemplate(template, userPrompt, frameCount) {
+function fillPromptTemplate(template, vars = {}) {
+  let result = String(template || '');
+  for (const [key, value] of Object.entries(vars)) {
+    result = result.replaceAll(`{${key}}`, value == null ? '' : String(value));
+  }
+  return result
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function fillFlipbookTemplate(template, userPrompt, frameCount, options = {}) {
   const layout = flipbookLayout(frameCount);
-  return template
-    .replaceAll('{frameCount}', String(frameCount))
-    .replaceAll('{columns}', String(layout.columns))
-    .replaceAll('{rows}', String(layout.rows))
-    .replaceAll('{userPrompt}', userPrompt);
+  const sheetFrameCount = options.sheetFrameCount || layout.sheetFrameCount || frameCount;
+  const totalOutputFrameCount = options.outputFrameCount || layout.outputFrameCount || frameCount;
+  const isBatched = Number(layout.batchCount) > 1 && !options.dropLeadingFrame;
+  const outputFrameCount = isBatched ? layout.batchFrameCount : totalOutputFrameCount;
+  const dropLeadingFrame = options.dropLeadingFrame ?? layout.dropLeadingFrame ?? false;
+  const size = options.size || els.genSize.value;
+  const frameAspectRatio =
+    size === '1024x1024'
+      ? '1:1（正方形）'
+      : size === '1024x1792'
+        ? '9:16（竖向矩形）'
+        : '16:9（横向矩形）';
+  const gridConstraint = `本次必须恰好 ${layout.columns} 列、${layout.rows} 行，不得增减任何一列或一行。`;
+  const frameSelectionRule = dropLeadingFrame
+    ? `第 1 格只作为动作起始锚点，程序裁切后会丢弃第 1 格；第 2 到第 ${sheetFrameCount} 格才是最终保留的 ${outputFrameCount} 帧。`
+    : isBatched
+      ? `本批 4 格全部保留；后端会生成 ${layout.batchCount} 批并合并为 ${totalOutputFrameCount} 帧。`
+      : `程序会保留全部 ${outputFrameCount} 个画面作为最终动画帧。`;
+  let prompt = fillPromptTemplate(template, {
+    frameCount: sheetFrameCount,
+    sheetFrameCount,
+    outputFrameCount,
+    totalOutputFrameCount,
+    columns: layout.columns,
+    rows: layout.rows,
+    columnsMinusOne: Math.max(0, layout.columns - 1),
+    rowsMinusOne: Math.max(0, layout.rows - 1),
+    frameCountMinusOne: Math.max(1, Number(sheetFrameCount) - 1),
+    frameAspectRatio,
+    gridConstraint,
+    frameSelectionRule,
+    batchCount: layout.batchCount || 1,
+    batchNumber: 1,
+    batchStartFrame: 1,
+    batchEndFrame: sheetFrameCount,
+    batchStartPercent: '0%',
+    batchEndPercent: `${Math.round(100 / (layout.batchCount || 1))}%`,
+    continuityRule: '后续批次由后端自动引用上一批最后一帧。',
+    phaseRule:
+      layout.batchCount > 1
+        ? `本批只推进总动作的前 ${Math.round(100 / layout.batchCount)}%，不要提前完成动作。`
+        : '本批完成整个动作。',
+    userPrompt,
+    segmentPrompt: userPrompt,
+    progress: '50%',
+    phaseHint: '保持动作连续，不要越界',
+    startAlias: '@1',
+    endAlias: '@2',
+  });
+  if (dropLeadingFrame && !template.includes('{frameSelectionRule}')) {
+    prompt = `${prompt}\n\n帧保留规则：${frameSelectionRule}`;
+  }
+  if (isBatched) {
+    prompt = `${prompt}\n\n生成方式：后端将按 ${layout.batchCount} 批依次生成；每批固定 2×2 / 4 格，上一批最后一帧会作为下一批连续性参考。当前预览显示第 1 批约束。`;
+  }
+  return prompt;
+}
+
+function promptByRoleOrId(role, id) {
+  const items = state.promptLibrary.items || [];
+  return items.find((item) => item.id === id) || items.find((item) => item.role === role) || null;
+}
+
+function promptRole(item) {
+  if (item?.role) return item.role;
+  if (item?.id === 'pflipbook-default') return 'flipbook';
+  return /\{(?:frameCount|sheetFrameCount|columns|rows|frameSelectionRule)\}/.test(
+    item?.content || '',
+  )
+    ? 'flipbook'
+    : 'general';
+}
+
+function promptByRole(role, preferredId = null) {
+  const items = state.promptLibrary.items || [];
+  const preferred = preferredId ? items.find((item) => item.id === preferredId) : null;
+  if (preferred && promptRole(preferred) === role) return preferred;
+  return items.find((item) => promptRole(item) === role) || null;
+}
+
+function promptBindingsForMode(mode = els.genMode.value) {
+  const atlas = promptByRole('flipbook', state.flipbook.templateId);
+  if (mode === 'single') return { general: true };
+  if (mode === 'flipbook') return { atlas };
+  return {
+    atlas,
+    keyframe: promptByRole('anchored-keyframe', 'panchored-keyframe'),
+    segment: promptByRole('anchored-segment', 'panchored-segment'),
+  };
+}
+
+function promptModeConfig(mode = els.genMode.value) {
+  return state.promptLibrary.modeMap?.[mode] || DEFAULT_PROMPT_MODE_MAP[mode];
+}
+
+function syncPromptBindingsForMode(mode = els.genMode.value) {
+  if (mode === 'single') return promptBindingsForMode(mode);
+  const bindings = promptBindingsForMode(mode);
+  if (bindings.atlas && bindings.atlas.id !== state.flipbook.templateId) {
+    state.flipbook.templateId = bindings.atlas.id;
+    state.flipbook.templateName = bindings.atlas.name;
+    state.flipbook.templateContent = bindings.atlas.content;
+  }
+  return bindings;
+}
+
+function promptUsableInMode(item, mode = els.genMode.value) {
+  return promptModeConfig(mode)?.selectableRoles?.includes(promptRole(item)) || false;
+}
+
+function composeAnchoredPreviewPrompt() {
+  const userPrompt = els.genPrompt.value.trim() || '（总体动作）';
+  const segmentPrompt = els.chain32SegmentPrompts[0]?.value.trim() || '（本段动作）';
+  const keyframeItem = promptByRoleOrId('anchored-keyframe', 'panchored-keyframe');
+  const segmentItem = promptByRoleOrId('anchored-segment', 'panchored-segment');
+  const keyframePreview = keyframeItem
+    ? fillPromptTemplate(keyframeItem.content, {
+        progress: '25%',
+        userPrompt,
+        phaseHint: segmentPrompt,
+      })
+    : '（提词库缺少「32帧锚点·中间关键帧」）';
+  const segmentPreview = segmentItem
+    ? fillPromptTemplate(segmentItem.content, {
+        userPrompt,
+        segmentPrompt,
+        startAlias: '@1',
+        endAlias: '@2',
+        endAnchorRule: '@2 是本段精确终点参考，仅第 2 批最后一格可以到达它。',
+        frameCount: '4',
+        columns: '2',
+        rows: '2',
+        frameCountMinusOne: '3',
+      })
+    : '（提词库缺少「32帧锚点·分段约束」）';
+  const atlas = state.flipbook.templateContent
+    ? fillFlipbookTemplate(
+        state.flipbook.templateContent,
+        [userPrompt, segmentPrompt].filter(Boolean).join('\n'),
+        4,
+      )
+    : '';
+  return [
+    '【中间关键帧模板预览 · K1】',
+    keyframePreview,
+    '',
+    '【分段约束模板预览 · K0→K1】',
+    segmentPreview,
+    atlas ? `\n【选用的翻页图集壳层】\n${atlas}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
 }
 
 function composeFlipbookPrompt(
@@ -256,35 +567,49 @@ function composeFlipbookPrompt(
 ) {
   const frameCount = frameCountOverride || Number(els.flipbookFrames.value) || 4;
   const layout = flipbookLayout(frameCount);
+  const sheetFrameCount = layout.sheetFrameCount || frameCount;
+  const outputFrameCount = layout.outputFrameCount || frameCount;
   const template = state.flipbook.templateContent || '';
   if (!template) {
     return {
       prompt: userPrompt,
       missing: userPrompt ? [] : ['userPrompt'],
-      frameCount,
+      frameCount: sheetFrameCount,
+      outputFrameCount,
+      batchCount: layout.batchCount || 1,
       ...layout,
     };
   }
   const missing = [];
   if (template.includes('{userPrompt}') && !userPrompt) missing.push('userPrompt');
   const prompt = fillFlipbookTemplate(template, userPrompt, frameCount);
-  return { prompt, missing, frameCount, ...layout };
+  return {
+    prompt,
+    missing,
+    frameCount: sheetFrameCount,
+    outputFrameCount,
+    batchCount: layout.batchCount || 1,
+    ...layout,
+  };
 }
 
 function stopFlipbookPreview() {
   if (state.flipbook.previewTimer) {
-    clearInterval(state.flipbook.previewTimer);
+    cancelAnimationFrame(state.flipbook.previewTimer);
     state.flipbook.previewTimer = null;
   }
   state.flipbook.previewPlaying = false;
   if (els.flipbookPlayBtn) {
     els.flipbookPlayBtn.textContent = '▶ 播放';
   }
+  if (els.workbenchPreviewBtn) {
+    els.workbenchPreviewBtn.textContent = '▶ 动画预览';
+  }
 }
 
 function showFlipbookFrame(index) {
   const animation = nodeAnimation();
-  if (!animation) return;
+  if (!animation?.frameUrls?.length) return;
   const urls = animation.frameUrls;
   const safeIndex = ((index % urls.length) + urls.length) % urls.length;
   state.flipbook.previewIndex = safeIndex;
@@ -297,14 +622,22 @@ function showFlipbookFrame(index) {
 
 function playFlipbookPreview() {
   const animation = nodeAnimation();
-  if (!animation) return;
+  if (!animation?.frameUrls?.length) return;
   stopFlipbookPreview();
   state.flipbook.previewPlaying = true;
   els.flipbookPlayBtn.textContent = 'Ⅱ 暂停';
+  els.workbenchPreviewBtn.textContent = 'Ⅱ 暂停动画';
   const fps = normalizeFps(els.flipbookFps.value || animation.fps, animation.fps || 4);
-  state.flipbook.previewTimer = setInterval(() => {
-    showFlipbookFrame(state.flipbook.previewIndex + 1);
-  }, Math.max(33, Math.round(1000 / fps)));
+  const frameDuration = 1000 / fps;
+  const startedAt = performance.now() - state.flipbook.previewIndex * frameDuration;
+  const tick = (now) => {
+    if (!state.flipbook.previewPlaying) return;
+    const frameIndex =
+      Math.floor(Math.max(0, now - startedAt) / frameDuration) % animation.frameUrls.length;
+    if (frameIndex !== state.flipbook.previewIndex) showFlipbookFrame(frameIndex);
+    state.flipbook.previewTimer = requestAnimationFrame(tick);
+  };
+  state.flipbook.previewTimer = requestAnimationFrame(tick);
 }
 
 function renderFlipbookResult() {
@@ -312,9 +645,9 @@ function renderFlipbookResult() {
   stopFlipbookPreview();
   els.flipbookResult.classList.toggle(
     'chain32',
-    animation?.mode === 'chain32' || animation?.mode === 'interpolate32',
+    animation?.mode === 'chain32' || animation?.mode === 'anchored-chain32',
   );
-  if (!animation) {
+  if (!animation || !animation.frameUrls?.length) {
     els.flipbookResult.hidden = true;
     els.flipbookFramesStrip.innerHTML = '';
     els.saveFlipbookFrameBtn.textContent = '存当前帧';
@@ -341,34 +674,154 @@ function chain32PromptValues() {
   return els.chain32SegmentPrompts.map((input) => input.value.trim());
 }
 
+function isAnchoredAnimation(animation = nodeAnimation()) {
+  return animation?.mode === 'anchored-chain32';
+}
+
+function isLegacyChain32(animation = nodeAnimation()) {
+  return animation?.mode === 'chain32';
+}
+
+function isAnyChain32(animation = nodeAnimation()) {
+  return isAnchoredAnimation(animation) || isLegacyChain32(animation);
+}
+
+function anchoredSegmentSlots(animation = nodeAnimation()) {
+  const slots = [null, null, null, null];
+  if (!Array.isArray(animation?.segments)) return slots;
+  for (const segment of animation.segments) {
+    if (!segment || typeof segment !== 'object') continue;
+    const index = Number(segment.index);
+    if (Number.isInteger(index) && index >= 0 && index <= 3) slots[index] = segment;
+  }
+  if (!slots.some(Boolean) && animation.segments.length && animation.mode === 'chain32') {
+    for (let i = 0; i < Math.min(4, animation.segments.length); i += 1) {
+      slots[i] = animation.segments[i];
+    }
+  }
+  return slots;
+}
+
+function anchoredPhase(animation = nodeAnimation()) {
+  if (isLegacyChain32(animation)) {
+    const count = animation.segments?.length || 0;
+    if (count >= 4) return 'complete';
+    return count > 0 ? 'segments' : 'legacy';
+  }
+  if (!isAnchoredAnimation(animation)) return 'idle';
+  if (animation.phase) return animation.phase;
+  const slots = anchoredSegmentSlots(animation);
+  if (slots.every(Boolean) && (animation.frameUrls?.length || 0) >= 32) return 'complete';
+  if (animation.keyframesConfirmed) return 'segments';
+  if (animation.keyframeUrls?.[1] && animation.keyframeUrls?.[2] && animation.keyframeUrls?.[3]) {
+    return 'awaiting-confirm';
+  }
+  return 'keyframes';
+}
+
 function loadChain32State(node = selectedNode()) {
   const animation = nodeAnimation(node);
-  const prompts = animation?.mode === 'chain32' ? animation.segmentPrompts || [] : [];
+  const prompts = isAnyChain32(animation) ? animation.segmentPrompts || [] : [];
   els.chain32SegmentPrompts.forEach((input, index) => {
     input.value = prompts[index] || '';
   });
+  renderChain32Keyframes(node);
   renderChain32Progress(node);
+}
+
+function renderChain32Keyframes(node = selectedNode()) {
+  if (!els.chain32Keyframes) return;
+  const refs = getGenRefs();
+  const animation = nodeAnimation(node);
+  const keyframeUrls = isAnchoredAnimation(animation)
+    ? animation.keyframeUrls || [refs[0] || null, null, null, null, refs[1] || null]
+    : [refs[0] || null, null, null, null, refs[1] || null];
+  const labels = ['K0', 'K1', 'K2', 'K3', 'K4'];
+  const roles = ['首帧 @1', '25%', '50%', '75%', '尾帧 @2'];
+  const phase = anchoredPhase(animation);
+  const loading = generationFor(node?.id)?.status === 'loading';
+
+  els.chain32Keyframes.innerHTML = '';
+  labels.forEach((label, index) => {
+    const url = keyframeUrls[index] || (index === 0 ? refs[0] : index === 4 ? refs[1] : null);
+    const status =
+      state.flipbook.keyframeStatus[index] ||
+      (url ? 'ready' : 'empty');
+    const card = document.createElement('div');
+    card.className = `chain32-keyframe ${status}${url ? ' ready' : ''}`;
+    const canRegen = index >= 1 && index <= 3 && Boolean(refs[0] && refs[1]);
+    card.innerHTML = `
+      <div class="chain32-keyframe-frame">
+        ${url ? `<img src="${url}" alt="${label}" />` : `<span>${roles[index]}</span>`}
+      </div>
+      <div class="chain32-keyframe-meta">
+        <strong>${label}</strong>
+        ${
+          canRegen
+            ? `<button type="button" class="chain32-keyframe-regen" data-keyframe-index="${index}" ${
+                loading ? 'disabled' : ''
+              }>重生成</button>`
+            : ''
+        }
+      </div>
+    `;
+    const regen = card.querySelector('.chain32-keyframe-regen');
+    regen?.addEventListener('click', (event) => {
+      event.preventDefault();
+      regenerateAnchoredKeyframe(index);
+    });
+    els.chain32Keyframes.appendChild(card);
+  });
+
+  const midReady = Boolean(keyframeUrls[1] && keyframeUrls[2] && keyframeUrls[3]);
+  const canConfirm =
+    midReady &&
+    Boolean(refs[0] && refs[1]) &&
+    !loading &&
+    phase !== 'segments' &&
+    phase !== 'complete';
+  if (els.chain32ConfirmBtn) {
+    els.chain32ConfirmBtn.disabled = !canConfirm;
+    els.chain32ConfirmBtn.textContent =
+      phase === 'complete'
+        ? '已完成 32 帧'
+        : phase === 'segments'
+          ? '分段生成中 / 可重试缺失段'
+          : '确认关键帧并生成四段';
+  }
+  if (els.chain32PhaseLabel) {
+    const labelsByPhase = {
+      idle: refs.length >= 2 ? '可生成中间关键帧' : '需要 @1 首帧与 @2 尾帧',
+      keyframes: '并行生成中间关键帧…',
+      'awaiting-confirm': '请确认 K1–K3 后开始四段',
+      segments: '并行生成四段动画…',
+      complete: '32 帧已就绪',
+      legacy: '旧版接力动画',
+    };
+    els.chain32PhaseLabel.textContent = labelsByPhase[phase] || labelsByPhase.idle;
+  }
 }
 
 function renderChain32Progress(node = selectedNode()) {
   const animation = nodeAnimation(node);
-  const completed = animation?.mode === 'chain32' ? animation.segments?.length || 0 : 0;
+  const slots = isAnyChain32(animation) ? anchoredSegmentSlots(animation) : [null, null, null, null];
   for (const [index, marker] of [...els.chain32Progress.children].entries()) {
-    marker.className = index < completed ? 'complete' : index === completed ? 'current' : '';
-    marker.title = index < completed ? `第 ${index + 1} 段已完成` : `第 ${index + 1} 段`;
-  }
-}
-
-function renderInterpolationProgress(node = selectedNode()) {
-  const animation = nodeAnimation(node);
-  const isInterpolation = animation?.mode === 'interpolate32';
-  const complete = [
-    Boolean(isInterpolation && animation.keyframeUrls?.length === 8),
-    ...Array.from({ length: 7 }, (_, index) => Boolean(animation?.interpolations?.[index])),
-  ];
-  const firstPending = complete.findIndex((value) => !value);
-  for (const [index, marker] of [...els.interpolationProgress.children].entries()) {
-    marker.className = complete[index] ? 'complete' : index === firstPending ? 'current' : '';
+    const status = state.flipbook.segmentStatus[index];
+    const done = Boolean(slots[index]);
+    marker.className = status === 'error'
+      ? 'error'
+      : done
+        ? 'complete'
+        : status === 'loading'
+          ? 'current'
+          : '';
+    marker.title = done
+      ? `第 ${index + 1} 段已完成`
+      : status === 'loading'
+        ? `第 ${index + 1} 段生成中`
+        : status === 'error'
+          ? `第 ${index + 1} 段失败`
+          : `第 ${index + 1} 段`;
   }
 }
 
@@ -376,27 +829,43 @@ function updateFlipbookUi() {
   const mode = els.genMode.value;
   const isFlipbook = mode === 'flipbook';
   const isChain32 = mode === 'chain32';
-  const isInterpolation = mode === 'interpolate32';
-  const isAnimation = isFlipbook || isChain32 || isInterpolation;
+  const isAnimation = isFlipbook || isChain32;
+  const bindings = syncPromptBindingsForMode(mode);
   state.flipbook.mode = mode;
   els.flipbookControls.hidden = !isAnimation;
   els.flipbookFramesLabel.hidden = !isFlipbook;
   els.chain32Controls.hidden = !isChain32;
-  els.interpolationControls.hidden = !isInterpolation;
-  const frameCount = isChain32 || isInterpolation ? 8 : Number(els.flipbookFrames.value) || 4;
-  const layout = isChain32 || isInterpolation ? FLIPBOOK_LAYOUTS[8] : flipbookLayout();
+  const frameCount = isChain32 ? 9 : Number(els.flipbookFrames.value) || 4;
+  const layout = isChain32 ? FLIPBOOK_LAYOUTS[9] : flipbookLayout();
   els.flipbookGridHint.textContent = isChain32
-    ? '4 段 × 8 帧 · 共生成 32 个独立画面'
-    : isInterpolation
-      ? '8 个关键帧 + 7 组相邻帧插值 · 合并为 32 帧'
-      : `网格 ${layout.columns}×${layout.rows} · 裁切后按序播放`;
-  els.flipbookTemplateName.textContent = state.flipbook.templateName || '未选择';
+    ? '关键帧规划 + 4 段并行 · 每段 2 批 2×2 · 共 32 帧'
+    : layout.dropLeadingFrame
+      ? `网格 ${layout.columns}×${layout.rows} · 首格作为锚点，裁切后保留 ${layout.outputFrameCount} 帧`
+      : `网格 ${layout.columns}×${layout.rows} · 单张图集裁切后按序播放`;
+  if (isChain32) {
+    const boundCount = [bindings.atlas, bindings.keyframe, bindings.segment].filter(Boolean).length;
+    els.flipbookTemplateName.textContent = `${boundCount}/3 模板已绑定`;
+    els.flipbookTemplateName.title = [bindings.atlas, bindings.keyframe, bindings.segment]
+      .filter(Boolean)
+      .map((item) => item.name)
+      .join(' · ');
+    els.flipbookPickTemplateBtn.textContent = '查看模板映射';
+  } else {
+    els.flipbookTemplateName.textContent = bindings.atlas?.name || '未找到翻页图集模板';
+    els.flipbookTemplateName.title = bindings.atlas?.name || '';
+    els.flipbookPickTemplateBtn.textContent = '更换模板';
+  }
+  const phase = anchoredPhase();
   els.generateBtn.textContent = generationFor()?.status === 'loading'
     ? els.generateBtn.textContent
     : isChain32
-      ? '生成 / 继续 32 帧'
-      : isInterpolation
-        ? '生成 / 继续关键帧插帧'
+      ? phase === 'awaiting-confirm'
+        ? '确认关键帧并生成'
+        : phase === 'segments'
+          ? '继续缺失分段'
+          : phase === 'complete'
+            ? '重新生成关键帧'
+            : '生成中间关键帧'
       : isFlipbook
       ? '生成动画'
       : '生成图片';
@@ -404,37 +873,38 @@ function updateFlipbookUi() {
   if (isFlipbook && frameCount >= 16) {
     els.flipbookClarityHint.hidden = false;
     els.flipbookClarityHint.textContent =
-      '16 帧时每格像素偏少，文字容易糊。建议：尺寸选 1:1；字少、字大、高对比；要清晰字优先用 4 帧。';
-    if (els.genSize.value !== '1024x1024') {
-      els.genSize.value = '1024x1024';
-      setImagePreviewAspectFromSize(els.genSize.value);
-    }
+      '16 帧使用一张 4×4 图集，每格像素较少；文字请尽量少、字号大并保持高对比。';
   } else if (isFlipbook && frameCount >= 8) {
     els.flipbookClarityHint.hidden = false;
     els.flipbookClarityHint.textContent =
-      '含文字时尽量字大、笔画粗、对比高；更稳的做法是改用 4 帧。';
+      '8 帧使用一张 3×3 图集：第 1 格作为动作起始锚点，最终保留后 8 格。';
+  } else if (isChain32) {
+    els.flipbookClarityHint.hidden = false;
+    els.flipbookClarityHint.textContent =
+      '请先选好 @1 首帧与 @2 尾帧。前三段不会看到最终尾帧，避免动作在第一段提前完成。';
+    els.flipbookClarityHint.textContent =
+      '每个 8 帧分段拆为两批 2×2；前一批只推进到段内 50%，后一批才使用该段尾锚点。';
   } else {
     els.flipbookClarityHint.hidden = true;
     els.flipbookClarityHint.textContent = '';
   }
 
   if (isAnimation) {
-    const composed = composeFlipbookPrompt(
-      isChain32
-        ? [els.genPrompt.value.trim(), els.chain32SegmentPrompts[0]?.value.trim()]
-            .filter(Boolean)
-            .join('\n')
-        : els.genPrompt.value.trim(),
-      isChain32 || isInterpolation ? 8 : null,
-    );
-    els.flipbookFinalPreview.textContent = composed.prompt || '（填写动作内容并选用提词模板）';
-    els.genPrompt.placeholder = isChain32
-      ? '32 帧主提示词：主体、场景、风格、总体动作…'
-      : isInterpolation
-        ? '关键帧动画：主体、场景、完整动作过程… 输入 @ 引用图片'
-        : '动画内容：动作、对象、镜头… 输入 @ 引用图片';
+    if (isChain32) {
+      els.flipbookFinalPreview.textContent = composeAnchoredPreviewPrompt();
+      els.genPrompt.placeholder = '32 帧主提示词：主体、场景、风格、总体动作…';
+    } else {
+      const composed = composeFlipbookPrompt(els.genPrompt.value.trim());
+      els.flipbookFinalPreview.textContent = composed.prompt || '（填写动作内容并选用提词模板）';
+      els.genPrompt.placeholder = '动画内容：动作、对象、镜头… 输入 @ 引用图片';
+    }
   } else {
     els.genPrompt.placeholder = '画面、构图、光线… 输入 @ 引用图片';
+  }
+
+  if (isChain32) {
+    renderChain32Keyframes();
+    renderChain32Progress();
   }
 }
 
@@ -458,16 +928,31 @@ async function persistFlipbookFps() {
   }
 }
 
-function setFlipbookTemplate(item) {
+function setFlipbookTemplate(item, { refresh = true } = {}) {
+  if (item && promptRole(item) !== 'flipbook') {
+    setGenStatus('当前模式只能绑定“翻页图集”角色的模板', 'error');
+    return false;
+  }
   state.flipbook.templateId = item?.id || null;
   state.flipbook.templateName = item?.name || '';
   state.flipbook.templateContent = item?.content || '';
   state.flipbook.pickingTemplate = false;
-  updateFlipbookUi();
+  if (refresh) updateFlipbookUi();
+  return true;
 }
 
-function nodeSubtitle(node) {
-  return node?.subtitle || '';
+function captionTextAt(elapsed) {
+  return captions()
+    .filter((caption) => elapsed >= caption.startMs && elapsed < caption.endMs)
+    .map((caption) => caption.text)
+    .filter(Boolean)
+    .join('\n');
+}
+
+function renderPreviewCaption(elapsed) {
+  const text = captionTextAt(elapsed);
+  els.previewCaption.textContent = text;
+  els.previewCaption.hidden = !text;
 }
 
 function formatTime(ms) {
@@ -512,6 +997,453 @@ function previewNodeAt(elapsed) {
     cursor += duration;
   }
   return { index: 0, localElapsed: 0, start: 0 };
+}
+
+function captions() {
+  if (!Array.isArray(state.timeline.captions)) state.timeline.captions = [];
+  return state.timeline.captions;
+}
+
+function selectedCaption() {
+  return captions().find((caption) => caption.id === state.captionTrack.selectedId) || null;
+}
+
+function captionTrackDurationMs() {
+  return Math.max(
+    10000,
+    previewTotalDuration(),
+    ...captions().map((caption) => Number(caption.endMs) || 0),
+  );
+}
+
+function captionTrackFitWidth() {
+  return Math.max(700, (els.captionTrackScroll.clientWidth || 724) - 24);
+}
+
+function applyCaptionCanvasWidth() {
+  const width = Math.round(captionTrackFitWidth() * state.captionTrack.zoom);
+  els.captionTrackCanvas.style.width = `${width}px`;
+  els.captionZoom.value = String(state.captionTrack.zoom);
+  els.captionZoomLabel.textContent = `${state.captionTrack.zoom}×`;
+  return width;
+}
+
+function captionSnapMs() {
+  if (state.captionTrack.zoom >= 12) return 10;
+  if (state.captionTrack.zoom >= 6) return 20;
+  return 50;
+}
+
+function captionRulerIntervalMs(duration, width) {
+  const target = (duration * 74) / Math.max(1, width);
+  const candidates = [
+    10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 15000, 30000, 60000,
+    120000, 300000, 600000,
+  ];
+  return candidates.find((value) => value >= target) || 600000;
+}
+
+function formatCaptionRulerTime(ms) {
+  if (ms < 60000) {
+    const seconds = ms / 1000;
+    return `${seconds < 10 && ms % 1000 ? seconds.toFixed(2) : seconds.toFixed(ms % 1000 ? 1 : 0)}s`;
+  }
+  return formatCaptionTime(ms).replace(/\.\d{2}$/, '');
+}
+
+function setCaptionZoom(value) {
+  const next = Math.min(20, Math.max(1, Math.round(Number(value) || 1)));
+  if (next === state.captionTrack.zoom) return;
+  const duration = captionTrackDurationMs();
+  const oldWidth = els.captionTrackCanvas.getBoundingClientRect().width || captionTrackFitWidth();
+  const playheadX = (state.captionTrack.elapsed / duration) * oldWidth;
+  const viewportX = playheadX - els.captionTrackScroll.scrollLeft;
+  state.captionTrack.zoom = next;
+  localStorage.setItem('script-flow-caption-zoom', String(next));
+  renderCaptionTrack();
+  const newWidth = els.captionTrackCanvas.getBoundingClientRect().width;
+  const newPlayheadX = (state.captionTrack.elapsed / duration) * newWidth;
+  els.captionTrackScroll.scrollLeft = Math.max(0, newPlayheadX - viewportX);
+}
+
+function formatCaptionTime(ms) {
+  const total = Math.max(0, Number(ms) || 0);
+  const minutes = Math.floor(total / 60000);
+  const seconds = Math.floor((total % 60000) / 1000);
+  const centiseconds = Math.floor((total % 1000) / 10);
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}.${String(centiseconds).padStart(2, '0')}`;
+}
+
+function stopCaptionPlayback() {
+  if (state.captionTrack.rafId) {
+    cancelAnimationFrame(state.captionTrack.rafId);
+    state.captionTrack.rafId = null;
+  }
+  state.captionTrack.playing = false;
+  els.captionPlayBtn.textContent = '▶ 播放';
+}
+
+function updateCaptionPreviewAspect() {
+  const image = els.captionPreviewImage;
+  const hasNaturalSize = !image.hidden && image.naturalWidth > 0 && image.naturalHeight > 0;
+  const ratio = hasNaturalSize ? image.naturalWidth / image.naturalHeight : 16 / 9;
+  const maxWidth = Math.min(680, Math.max(220, els.captionTrackPanel.clientWidth - 44));
+  const maxHeight = Math.min(400, Math.max(180, window.innerHeight * 0.38));
+  const width = Math.min(maxWidth, maxHeight * ratio);
+  els.captionPreviewStage.style.width = `${Math.round(width)}px`;
+  els.captionPreviewStage.style.aspectRatio = hasNaturalSize
+    ? `${image.naturalWidth} / ${image.naturalHeight}`
+    : '16 / 9';
+}
+
+function renderCaptionWorkbenchFrame() {
+  const elapsed = state.captionTrack.elapsed;
+  const videoDuration = previewTotalDuration();
+  const trackDuration = captionTrackDurationMs();
+  const hasScene = previewNodes().length > 0 && elapsed < videoDuration;
+  let imageUrl = '';
+  let nodeLabel = '';
+
+  if (hasScene) {
+    const scene = previewNodeAt(elapsed);
+    const node = previewNodes()[scene.index];
+    const animation = nodeAnimation(node);
+    imageUrl = node?.imageUrl || '';
+    if (animation?.frameUrls?.length) {
+      const fps = normalizeFps(animation.fps, 4);
+      const frameIndex =
+        Math.floor((Math.max(0, scene.localElapsed) * fps) / 1000) % animation.frameUrls.length;
+      imageUrl = animation.frameUrls[frameIndex];
+    }
+    nodeLabel = `${node?.title || '未命名镜头'} · ${formatCaptionTime(scene.localElapsed)}`;
+  }
+
+  els.captionPreviewImage.hidden = !imageUrl;
+  els.captionPreviewEmpty.hidden = Boolean(imageUrl);
+  if (imageUrl && (els.captionPreviewImage.getAttribute('src') || '').split('?')[0] !== imageUrl) {
+    els.captionPreviewImage.src = imageUrl;
+  }
+  if (!imageUrl) updateCaptionPreviewAspect();
+  els.captionPreviewNode.textContent = nodeLabel;
+  const text = captionTextAt(elapsed);
+  els.captionPreviewText.textContent = text;
+  els.captionPreviewText.hidden = !text;
+  els.captionCurrentTime.textContent = formatCaptionTime(elapsed);
+  els.captionTotalTime.textContent = formatCaptionTime(trackDuration);
+  els.captionPlayhead.style.left = `${Math.min(100, Math.max(0, (elapsed / trackDuration) * 100))}%`;
+  if (state.captionTrack.playing && state.captionTrack.zoom > 1) {
+    const playheadX =
+      (elapsed / trackDuration) * els.captionTrackCanvas.getBoundingClientRect().width;
+    const left = els.captionTrackScroll.scrollLeft;
+    const right = left + els.captionTrackScroll.clientWidth;
+    if (playheadX > right - 72) {
+      els.captionTrackScroll.scrollLeft = Math.max(0, playheadX - 96);
+    } else if (playheadX < left + 24) {
+      els.captionTrackScroll.scrollLeft = Math.max(0, playheadX - 24);
+    }
+  }
+}
+
+function setCaptionWorkbenchElapsed(elapsed) {
+  state.captionTrack.elapsed = Math.min(
+    captionTrackDurationMs(),
+    Math.max(0, Number(elapsed) || 0),
+  );
+  if (state.captionTrack.playing) {
+    state.captionTrack.startedAt = performance.now() - state.captionTrack.elapsed;
+  }
+  renderCaptionWorkbenchFrame();
+}
+
+function captionPlaybackTick(now) {
+  if (!state.captionTrack.playing) return;
+  state.captionTrack.elapsed = now - state.captionTrack.startedAt;
+  const duration = captionTrackDurationMs();
+  if (state.captionTrack.elapsed >= duration) {
+    state.captionTrack.elapsed = duration;
+    stopCaptionPlayback();
+    renderCaptionWorkbenchFrame();
+    return;
+  }
+  renderCaptionWorkbenchFrame();
+  state.captionTrack.rafId = requestAnimationFrame(captionPlaybackTick);
+}
+
+function toggleCaptionPlayback() {
+  if (state.captionTrack.playing) {
+    stopCaptionPlayback();
+    return;
+  }
+  const duration = captionTrackDurationMs();
+  if (state.captionTrack.elapsed >= duration) state.captionTrack.elapsed = 0;
+  state.captionTrack.playing = true;
+  state.captionTrack.startedAt = performance.now() - state.captionTrack.elapsed;
+  els.captionPlayBtn.textContent = 'Ⅱ 暂停';
+  state.captionTrack.rafId = requestAnimationFrame(captionPlaybackTick);
+}
+
+function captionStartForCurrentContext() {
+  if (!els.captionTrackPanel.hidden) return Math.round(state.captionTrack.elapsed);
+  if (state.preview.open) return Math.round(state.preview.elapsed);
+  const node = selectedNode();
+  const index = previewNodes().findIndex((entry) => entry.id === node?.id);
+  return index >= 0 ? previewStartForIndex(index) : 0;
+}
+
+function openCaptionTrackPanel() {
+  closeLibraryPanel();
+  closeGeneratedAssetsPanel();
+  closePromptLibraryPanel();
+  stopCaptionPlayback();
+  state.captionTrack.elapsed = state.preview.open
+    ? state.preview.elapsed
+    : captionStartForCurrentContext();
+  els.captionTrackPanel.hidden = false;
+  els.captionTrackBackdrop.hidden = false;
+  renderCaptionTrack();
+  requestAnimationFrame(() => {
+    const duration = captionTrackDurationMs();
+    const playheadX =
+      (state.captionTrack.elapsed / duration) * els.captionTrackCanvas.getBoundingClientRect().width;
+    els.captionTrackScroll.scrollLeft = Math.max(
+      0,
+      playheadX - els.captionTrackScroll.clientWidth / 2,
+    );
+  });
+}
+
+function closeCaptionTrackPanel() {
+  stopCaptionPlayback();
+  els.captionTrackPanel.hidden = true;
+  els.captionTrackBackdrop.hidden = true;
+  state.captionTrack.drag = null;
+}
+
+function renderCaptionEditor() {
+  const caption = selectedCaption();
+  els.captionEditor.hidden = !caption;
+  if (!caption) return;
+  els.captionText.value = caption.text || '';
+  els.captionStart.value = (caption.startMs / 1000).toFixed(2);
+  els.captionEnd.value = (caption.endMs / 1000).toFixed(2);
+}
+
+async function persistCaption(caption) {
+  const updated = await api(`/api/captions/${caption.id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      text: caption.text,
+      startMs: caption.startMs,
+      endMs: caption.endMs,
+      anchorNodeId: caption.anchorNodeId || null,
+    }),
+  });
+  const index = captions().findIndex((entry) => entry.id === updated.id);
+  if (index >= 0) captions()[index] = updated;
+  captions().sort((a, b) => a.startMs - b.startMs);
+  renderCaptionTrack();
+  return updated;
+}
+
+function beginCaptionDrag(event, caption, mode) {
+  event.preventDefault();
+  event.stopPropagation();
+  const laneRect = els.captionLane.getBoundingClientRect();
+  if (!laneRect.width) return;
+  const duration = captionTrackDurationMs();
+  const origin = {
+    x: event.clientX,
+    startMs: caption.startMs,
+    endMs: caption.endMs,
+  };
+  state.captionTrack.selectedId = caption.id;
+  state.captionTrack.drag = { captionId: caption.id, mode };
+  renderCaptionEditor();
+
+  const onMove = (moveEvent) => {
+    const snapMs = captionSnapMs();
+    const deltaMs =
+      Math.round((((moveEvent.clientX - origin.x) / laneRect.width) * duration) / snapMs) *
+      snapMs;
+    if (mode === 'start') {
+      caption.startMs = Math.max(0, Math.min(origin.endMs - 100, origin.startMs + deltaMs));
+    } else if (mode === 'end') {
+      caption.endMs = Math.min(
+        duration,
+        Math.max(origin.startMs + 100, origin.endMs + deltaMs),
+      );
+    } else {
+      const length = origin.endMs - origin.startMs;
+      caption.startMs = Math.max(0, Math.min(duration - length, origin.startMs + deltaMs));
+      caption.endMs = caption.startMs + length;
+    }
+    setCaptionWorkbenchElapsed(mode === 'end' ? caption.endMs : caption.startMs);
+    renderCaptionTrack();
+  };
+  const onEnd = async () => {
+    document.removeEventListener('pointermove', onMove);
+    document.removeEventListener('pointerup', onEnd);
+    state.captionTrack.drag = null;
+    try {
+      await persistCaption(caption);
+      setGenStatus('字幕时间已更新', 'success');
+    } catch (err) {
+      await loadTimeline();
+      setGenStatus(`字幕时间保存失败：${err.message}`, 'error');
+    }
+  };
+  document.addEventListener('pointermove', onMove);
+  document.addEventListener('pointerup', onEnd, { once: true });
+}
+
+function renderCaptionTrack() {
+  const items = [...captions()].sort((a, b) => a.startMs - b.startMs);
+  const duration = captionTrackDurationMs();
+  const canvasWidth = applyCaptionCanvasWidth();
+  const rowEnds = [];
+  const rows = new Map();
+  for (const caption of items) {
+    let row = rowEnds.findIndex((endMs) => caption.startMs >= endMs);
+    if (row < 0) {
+      row = rowEnds.length;
+      rowEnds.push(caption.endMs);
+    } else {
+      rowEnds[row] = caption.endMs;
+    }
+    rows.set(caption.id, row);
+  }
+  els.captionTrackSummary.textContent = `${items.length} 条字幕 · ${(duration / 1000).toFixed(1)} 秒`;
+  els.captionTrackEmpty.hidden = items.length > 0;
+  els.captionRuler.innerHTML = '';
+  const tickInterval = captionRulerIntervalMs(duration, canvasWidth);
+  for (let time = 0; time <= duration; time += tickInterval) {
+    const tick = document.createElement('span');
+    tick.style.left = `${(time / duration) * 100}%`;
+    tick.textContent = formatCaptionRulerTime(time);
+    els.captionRuler.appendChild(tick);
+  }
+  if (duration % tickInterval !== 0) {
+    const finalTick = document.createElement('span');
+    finalTick.style.left = '100%';
+    finalTick.textContent = formatCaptionRulerTime(duration);
+    els.captionRuler.appendChild(finalTick);
+  }
+
+  els.captionShotLane.innerHTML = '';
+  let shotCursor = 0;
+  for (const node of previewNodes()) {
+    const shotDuration = nodeDuration(node);
+    const shot = document.createElement('button');
+    shot.type = 'button';
+    shot.className = 'caption-shot';
+    shot.style.left = `${(shotCursor / duration) * 100}%`;
+    shot.style.width = `${Math.max(0.8, (shotDuration / duration) * 100)}%`;
+    shot.title = `${node.title || '未命名镜头'} · ${(shotDuration / 1000).toFixed(1)}s`;
+    shot.innerHTML = `
+      ${node.imageUrl ? `<img src="${escapeHtml(node.imageUrl)}" alt="" />` : '<span class="caption-shot-empty"></span>'}
+      <strong>${escapeHtml(node.title || '未命名')}</strong>
+    `;
+    const shotStart = shotCursor;
+    shot.addEventListener('click', (event) => {
+      event.stopPropagation();
+      stopCaptionPlayback();
+      setCaptionWorkbenchElapsed(shotStart);
+    });
+    els.captionShotLane.appendChild(shot);
+    shotCursor += shotDuration;
+  }
+
+  els.captionLane.innerHTML = '';
+  els.captionLane.style.height = `${Math.max(76, rowEnds.length * 34 + 12)}px`;
+  for (const caption of items) {
+    const bar = document.createElement('div');
+    bar.className = `caption-block${caption.id === state.captionTrack.selectedId ? ' selected' : ''}`;
+    bar.style.left = `${(caption.startMs / duration) * 100}%`;
+    bar.style.width = `${Math.max(0.8, ((caption.endMs - caption.startMs) / duration) * 100)}%`;
+    bar.style.top = `${8 + (rows.get(caption.id) || 0) * 34}px`;
+    bar.title = `${(caption.startMs / 1000).toFixed(2)}s – ${(caption.endMs / 1000).toFixed(2)}s`;
+    bar.innerHTML = `
+      <button type="button" class="caption-resize caption-resize-start" aria-label="调整字幕开始时间"></button>
+      <span>${escapeHtml(caption.text)}</span>
+      <button type="button" class="caption-resize caption-resize-end" aria-label="调整字幕结束时间"></button>
+    `;
+    bar.addEventListener('click', () => {
+      state.captionTrack.selectedId = caption.id;
+      stopCaptionPlayback();
+      setCaptionWorkbenchElapsed(caption.startMs);
+      renderCaptionTrack();
+    });
+    bar.addEventListener('pointerdown', (event) => {
+      if (event.target.closest('.caption-resize-start')) beginCaptionDrag(event, caption, 'start');
+      else if (event.target.closest('.caption-resize-end')) beginCaptionDrag(event, caption, 'end');
+      else beginCaptionDrag(event, caption, 'move');
+    });
+    els.captionLane.appendChild(bar);
+  }
+  renderCaptionEditor();
+  renderCaptionWorkbenchFrame();
+}
+
+async function addCaption() {
+  const startMs = captionStartForCurrentContext();
+  const caption = await api('/api/captions', {
+    method: 'POST',
+    body: JSON.stringify({
+      text: '新字幕',
+      startMs,
+      endMs: startMs + 2000,
+      anchorNodeId: selectedNode()?.id || null,
+    }),
+  });
+  captions().push(caption);
+  captions().sort((a, b) => a.startMs - b.startMs);
+  state.captionTrack.selectedId = caption.id;
+  renderCaptionTrack();
+  els.captionText.focus();
+}
+
+async function saveCaptionEditor() {
+  const caption = selectedCaption();
+  if (!caption) return;
+  const text = els.captionText.value.trim();
+  const startMs = Math.round(Number(els.captionStart.value) * 1000);
+  const endMs = Math.round(Number(els.captionEnd.value) * 1000);
+  if (!text) {
+    setGenStatus('字幕内容不能为空', 'error');
+    return;
+  }
+  caption.text = text;
+  caption.startMs = Number.isFinite(startMs) ? Math.max(0, startMs) : caption.startMs;
+  caption.endMs = Number.isFinite(endMs)
+    ? Math.max(caption.startMs + 100, endMs)
+    : caption.endMs;
+  try {
+    await persistCaption(caption);
+    setGenStatus('字幕已保存', 'success');
+  } catch (err) {
+    setGenStatus(`字幕保存失败：${err.message}`, 'error');
+  }
+}
+
+async function deleteSelectedCaption() {
+  const caption = selectedCaption();
+  if (!caption) return;
+  const confirmed = await showAppDialog({
+    title: '删除字幕',
+    message: `确定删除「${caption.text}」？删除后无法恢复。`,
+    confirmLabel: '删除字幕',
+    tone: 'danger',
+  });
+  if (!confirmed) return;
+  try {
+    await api(`/api/captions/${caption.id}`, { method: 'DELETE' });
+    state.timeline.captions = captions().filter((entry) => entry.id !== caption.id);
+    state.captionTrack.selectedId = null;
+    renderCaptionTrack();
+    setGenStatus('字幕已删除', 'success');
+  } catch (err) {
+    setGenStatus(`字幕删除失败：${err.message}`, 'error');
+  }
 }
 
 function getGenRefs() {
@@ -633,10 +1565,18 @@ function renderRefChips() {
   refs.forEach((url, index) => {
     const chip = document.createElement('div');
     chip.className = 'ref-chip';
-    chip.title = `点击 @${index + 1} 插入 Prompt`;
+    const role =
+      els.genMode.value === 'chain32'
+        ? index === 0
+          ? ' · 首帧 K0'
+          : index === 1
+            ? ' · 尾帧 K4'
+            : ''
+        : '';
+    chip.title = `点击 @${index + 1} 插入 Prompt${role}`;
     chip.innerHTML = `
       <img src="${url}" alt="" />
-      <button type="button" class="ref-chip-mention" aria-label="插入参考图 @${index + 1}">@${index + 1}</button>
+      <button type="button" class="ref-chip-mention" aria-label="插入参考图 @${index + 1}">@${index + 1}${role ? role.replace(' · ', ' ') : ''}</button>
       <button type="button" class="ref-chip-remove" aria-label="移除参考图">×</button>
     `;
     chip.querySelector('.ref-chip-mention').addEventListener('click', () => {
@@ -650,6 +1590,7 @@ function renderRefChips() {
   });
   updateReferenceCount();
   renderPromptReferenceTags();
+  if (els.genMode.value === 'chain32') renderChain32Keyframes();
 }
 
 function updateReferenceCount() {
@@ -662,21 +1603,23 @@ function updateReferenceCount() {
 function updateImageActions() {
   const node = selectedNode();
   const hasImage = Boolean(node?.imageUrl);
+  const hasFrames = Boolean(nodeAnimation(node)?.frameUrls?.length);
   els.addToLibraryBtn.disabled = !hasImage;
   els.useCurrentRefBtn.disabled = !hasImage;
-  els.saveFlipbookFrameBtn.disabled = !nodeAnimation(node);
+  els.saveFlipbookFrameBtn.disabled = !hasFrames;
 }
 
 function updateNodeActions() {
   const hasNode = Boolean(selectedNode());
   const hasPreviewNode = previewNodes().length > 0;
+  const hasCurrentAnimation = Boolean(nodeAnimation()?.frameUrls?.length);
   els.saveNodeTopBtn.disabled = !hasNode;
   els.deleteNodeTopBtn.disabled = !hasNode;
   els.imageUpload.disabled = !hasNode;
   els.fillPromptBtn.disabled = !hasNode;
   els.genPrompt.disabled = !hasNode;
   els.previewBtn.disabled = !hasPreviewNode;
-  els.workbenchPreviewBtn.disabled = !hasPreviewNode;
+  els.workbenchPreviewBtn.disabled = !hasCurrentAnimation;
 }
 
 async function loadLibrary() {
@@ -689,6 +1632,8 @@ function openLibrary(mode = 'manage') {
     setGenStatus('请先选择时间线节点，再选择参考图', 'error');
     return;
   }
+  closeCaptionTrackPanel();
+  closeGeneratedAssetsPanel();
   closePromptLibraryPanel();
   state.libraryMode = mode;
   const selecting = mode === 'select';
@@ -709,14 +1654,333 @@ function closeLibraryPanel() {
   els.libraryBackdrop.hidden = true;
 }
 
+async function loadGeneratedAssets() {
+  state.generatedAssets = await api('/api/generated-assets');
+  renderGeneratedAssets();
+}
+
+async function openGeneratedAssets() {
+  closeLibraryPanel();
+  closeCaptionTrackPanel();
+  closePromptLibraryPanel();
+  els.generatedAssetsSearch.value = '';
+  els.generatedAssetsFilter.value = 'all';
+  els.generatedAssetsPanel.hidden = false;
+  els.generatedAssetsBackdrop.hidden = false;
+  els.generatedAssetsGrid.innerHTML = '<p class="generated-assets-empty">正在加载素材…</p>';
+  try {
+    await loadGeneratedAssets();
+  } catch (err) {
+    els.generatedAssetsGrid.innerHTML = `<p class="generated-assets-empty">素材仓库加载失败<br>${escapeHtml(err.message)}</p>`;
+  }
+}
+
+function closeGeneratedAssetsPanel() {
+  stopGeneratedAssetPreview();
+  els.generatedAssetsPanel.hidden = true;
+  els.generatedAssetsBackdrop.hidden = true;
+}
+
+function generatedAssetDate(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date);
+}
+
+function generatedAssetFrameUrls(item) {
+  if (!item) return [];
+  const animation = item.animation;
+  if (Array.isArray(animation?.frameUrls) && animation.frameUrls.length) {
+    return animation.frameUrls;
+  }
+  const fromSegments = [];
+  for (const segment of animation?.segments || []) {
+    for (const url of segment?.frameUrls || []) fromSegments.push(url);
+  }
+  if (fromSegments.length) return fromSegments;
+  const single = item.coverUrl || item.imageUrl;
+  return single ? [single] : [];
+}
+
+function stopGeneratedAssetPreview() {
+  if (state.assetPreview.rafId) {
+    cancelAnimationFrame(state.assetPreview.rafId);
+    state.assetPreview.rafId = null;
+  }
+  state.assetPreview.playing = false;
+  state.assetPreview.assetId = null;
+  state.assetPreview.index = 0;
+  state.assetPreview.startedAt = 0;
+}
+
+function showGeneratedAssetFrame(assetId, index) {
+  const card = els.generatedAssetsGrid.querySelector(`[data-asset-id="${assetId}"]`);
+  if (!card) return;
+  const item = (state.generatedAssets.items || []).find((entry) => entry.id === assetId);
+  const frameUrls = generatedAssetFrameUrls(item);
+  if (!frameUrls.length) return;
+  const safeIndex = ((index % frameUrls.length) + frameUrls.length) % frameUrls.length;
+  state.assetPreview.index = safeIndex;
+  const coverImage = card.querySelector('.generated-asset-cover-image');
+  const label = card.querySelector('.generated-asset-frame-label');
+  const playBtn = card.querySelector('.generated-asset-play');
+  if (coverImage) {
+    const next = frameUrls[safeIndex];
+    if ((coverImage.getAttribute('src') || '').split('?')[0] !== next) {
+      coverImage.src = next;
+    }
+  }
+  if (label) label.textContent = `${safeIndex + 1} / ${frameUrls.length}`;
+  if (playBtn) {
+    playBtn.textContent = state.assetPreview.playing && state.assetPreview.assetId === assetId
+      ? 'Ⅱ 暂停'
+      : '▶ 播放';
+    playBtn.setAttribute(
+      'aria-label',
+      state.assetPreview.playing && state.assetPreview.assetId === assetId ? '暂停预览' : '播放预览',
+    );
+  }
+  for (const frame of card.querySelectorAll('.generated-asset-frame')) {
+    frame.classList.toggle('active', Number(frame.dataset.frameIndex) === safeIndex);
+  }
+}
+
+function playGeneratedAssetPreview(item, { fromIndex = 0, resume = false } = {}) {
+  const frameUrls = generatedAssetFrameUrls(item);
+  if (frameUrls.length < 2) {
+    openLightbox(frameUrls[0] || item.coverUrl || item.imageUrl, item.name);
+    return;
+  }
+  if (!resume && state.assetPreview.playing && state.assetPreview.assetId === item.id) {
+    const pausedIndex = state.assetPreview.index;
+    stopGeneratedAssetPreview();
+    state.assetPreview.assetId = item.id;
+    state.assetPreview.index = pausedIndex;
+    showGeneratedAssetFrame(item.id, pausedIndex);
+    return;
+  }
+  stopGeneratedAssetPreview();
+  state.assetPreview.assetId = item.id;
+  state.assetPreview.playing = true;
+  state.assetPreview.index = fromIndex;
+  const fps = normalizeFps(item.fps || item.animation?.fps, 4);
+  const frameDuration = Math.max(1, Math.round(1000 / fps));
+  state.assetPreview.startedAt = performance.now() - fromIndex * frameDuration;
+  showGeneratedAssetFrame(item.id, fromIndex);
+  const tick = (now) => {
+    if (!state.assetPreview.playing || state.assetPreview.assetId !== item.id) return;
+    const frameIndex = Math.floor((now - state.assetPreview.startedAt) / frameDuration) % frameUrls.length;
+    if (frameIndex !== state.assetPreview.index) showGeneratedAssetFrame(item.id, frameIndex);
+    state.assetPreview.rafId = requestAnimationFrame(tick);
+  };
+  state.assetPreview.rafId = requestAnimationFrame(tick);
+}
+
+function renderGeneratedAssets() {
+  const resumePreview = state.assetPreview.playing
+    ? { id: state.assetPreview.assetId, index: state.assetPreview.index }
+    : null;
+  if (state.assetPreview.rafId) {
+    cancelAnimationFrame(state.assetPreview.rafId);
+    state.assetPreview.rafId = null;
+  }
+  state.assetPreview.playing = false;
+
+  const items = state.generatedAssets.items || [];
+  const query = els.generatedAssetsSearch.value.trim().toLowerCase();
+  const type = els.generatedAssetsFilter.value;
+  const visibleItems = items.filter((item) => {
+    if (type !== 'all' && item.type !== type) return false;
+    return `${item.name || ''} ${item.prompt || ''} ${item.model || ''}`
+      .toLowerCase()
+      .includes(query);
+  });
+  els.generatedAssetsGrid.innerHTML = '';
+
+  if (!visibleItems.length) {
+    els.generatedAssetsGrid.innerHTML = items.length
+      ? '<p class="generated-assets-empty">没有匹配的素材</p>'
+      : '<p class="generated-assets-empty">素材仓库还是空的<br>生成图片或动画后会自动保存在这里</p>';
+    return;
+  }
+
+  for (const item of visibleItems) {
+    const isAnimation = item.type === 'animation';
+    const frameUrls = generatedAssetFrameUrls(item);
+    const expanded = state.expandedGeneratedAssets.has(item.id);
+    const isPlaying = resumePreview?.id === item.id;
+    const currentIndex = isPlaying ? resumePreview.index : 0;
+    const coverUrl = (isAnimation && frameUrls[currentIndex]) || item.coverUrl || item.imageUrl || '';
+    const meta = [
+      isAnimation ? `${frameUrls.length || item.frameCount || 0} 帧` : '单张图片',
+      isAnimation && (item.fps || item.animation?.fps) ? `${item.fps || item.animation.fps} FPS` : '',
+      item.model || '',
+      generatedAssetDate(item.updatedAt || item.createdAt),
+    ].filter(Boolean);
+    const card = document.createElement('article');
+    card.className = `generated-asset-card${isAnimation ? ' is-animation' : ''}`;
+    card.dataset.assetId = item.id;
+    card.innerHTML = `
+      <div class="generated-asset-cover${isAnimation ? ' is-animation' : ''}">
+        <button type="button" class="generated-asset-cover-hit" aria-label="${isAnimation ? '放大查看当前帧' : '查看图片'}">
+          <img class="generated-asset-cover-image" src="${escapeHtml(coverUrl)}" alt="${escapeHtml(item.name || '')}" />
+        </button>
+        <span class="generated-asset-type">${isAnimation ? '动画' : '图片'}</span>
+        ${isAnimation
+          ? `<span class="generated-asset-frame-label">${currentIndex + 1} / ${frameUrls.length || 1}</span>
+             <button type="button" class="generated-asset-play" aria-label="播放预览">${isPlaying ? 'Ⅱ 暂停' : '▶ 播放'}</button>`
+          : ''}
+      </div>
+      <div class="generated-asset-body">
+        <div class="generated-asset-heading">
+          <strong title="${escapeHtml(item.name || '')}">${escapeHtml(item.name || '未命名素材')}</strong>
+          <button type="button" class="generated-asset-delete" aria-label="删除素材">×</button>
+        </div>
+        <p class="generated-asset-meta">${escapeHtml(meta.join(' · '))}</p>
+        ${item.prompt ? `<p class="generated-asset-prompt" title="${escapeHtml(item.prompt)}">${escapeHtml(item.prompt)}</p>` : ''}
+        <div class="generated-asset-actions">
+          <button type="button" class="btn btn-primary btn-sm generated-asset-apply"${selectedNode() ? '' : ' disabled'}>应用到当前节点</button>
+          <button type="button" class="btn btn-ghost btn-sm generated-asset-rename">重命名</button>
+          ${isAnimation ? `<button type="button" class="btn btn-ghost btn-sm generated-asset-toggle">${expanded ? '收起帧' : `查看帧 (${frameUrls.length})`}</button>` : ''}
+        </div>
+        ${isAnimation
+          ? `<div class="generated-asset-frames"${expanded ? '' : ' hidden'}>${frameUrls
+              .map(
+                (url, index) =>
+                  `<button type="button" class="generated-asset-frame${index === currentIndex ? ' active' : ''}" data-frame-index="${index}" title="预览第 ${index + 1} 帧"><img src="${escapeHtml(url)}" alt="第 ${index + 1} 帧" /></button>`,
+              )
+              .join('')}</div>`
+          : ''}
+      </div>
+    `;
+
+    card.querySelector('.generated-asset-cover-hit').addEventListener('click', () => {
+      if (isAnimation) {
+        openLightbox(frameUrls[state.assetPreview.assetId === item.id ? state.assetPreview.index : 0] || coverUrl, item.name);
+        return;
+      }
+      openLightbox(item.coverUrl || item.imageUrl, item.name);
+    });
+    card.querySelector('.generated-asset-play')?.addEventListener('click', (event) => {
+      event.stopPropagation();
+      playGeneratedAssetPreview(item, {
+        fromIndex: state.assetPreview.assetId === item.id ? state.assetPreview.index : 0,
+      });
+    });
+    card.querySelector('.generated-asset-apply').addEventListener('click', async () => {
+      const node = selectedNode();
+      if (!node) {
+        setGenStatus('请先选择要应用素材的时间线节点', 'error');
+        return;
+      }
+      try {
+        const data = await api(`/api/generated-assets/${item.id}/apply`, {
+          method: 'POST',
+          body: JSON.stringify({ nodeId: node.id }),
+        });
+        const index = state.timeline.nodes.findIndex((entry) => entry.id === node.id);
+        if (index >= 0) state.timeline.nodes[index] = data.node;
+        renderNodes();
+        renderEditor();
+        setGenStatus(`已应用素材：${item.name}`, 'success');
+      } catch (err) {
+        setGenStatus(`应用素材失败：${err.message}`, 'error');
+      }
+    });
+    card.querySelector('.generated-asset-rename').addEventListener('click', async () => {
+      const name = await openAppDialog({
+        title: '重命名素材',
+        message: '为这份素材设置一个便于查找的名称。',
+        confirmLabel: '保存名称',
+        input: {
+          label: '素材名称',
+          value: item.name || '',
+          placeholder: '输入素材名称',
+        },
+      });
+      if (name === null || !name.trim() || name.trim() === item.name) return;
+      try {
+        await api(`/api/generated-assets/${item.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ name: name.trim() }),
+        });
+        await loadGeneratedAssets();
+      } catch (err) {
+        setGenStatus(`重命名失败：${err.message}`, 'error');
+      }
+    });
+    card.querySelector('.generated-asset-delete').addEventListener('click', async () => {
+      const confirmed = await openAppDialog({
+        title: '删除素材',
+        message: `确定删除「${item.name}」？\n正在被节点使用的图片文件会继续保留。`,
+        confirmLabel: '删除素材',
+        tone: 'danger',
+      });
+      if (!confirmed) return;
+      try {
+        if (state.assetPreview.assetId === item.id) stopGeneratedAssetPreview();
+        await api(`/api/generated-assets/${item.id}`, { method: 'DELETE' });
+        state.expandedGeneratedAssets.delete(item.id);
+        await loadGeneratedAssets();
+        setGenStatus(`已删除素材：${item.name}`, 'success');
+      } catch (err) {
+        setGenStatus(`删除素材失败：${err.message}`, 'error');
+      }
+    });
+    const toggle = card.querySelector('.generated-asset-toggle');
+    toggle?.addEventListener('click', () => {
+      if (state.expandedGeneratedAssets.has(item.id)) state.expandedGeneratedAssets.delete(item.id);
+      else state.expandedGeneratedAssets.add(item.id);
+      renderGeneratedAssets();
+    });
+    for (const frame of card.querySelectorAll('.generated-asset-frame')) {
+      frame.addEventListener('click', () => {
+        const index = Number(frame.dataset.frameIndex);
+        if (state.assetPreview.playing && state.assetPreview.assetId === item.id) {
+          stopGeneratedAssetPreview();
+        }
+        showGeneratedAssetFrame(item.id, index);
+        state.assetPreview.assetId = item.id;
+        state.assetPreview.index = index;
+      });
+      frame.addEventListener('dblclick', () => {
+        const index = Number(frame.dataset.frameIndex);
+        openLightbox(frameUrls[index], `${item.name} · 第 ${index + 1} 帧`);
+      });
+    }
+    els.generatedAssetsGrid.appendChild(card);
+  }
+
+  if (resumePreview) {
+    const stillVisible = visibleItems.some((item) => item.id === resumePreview.id);
+    if (!stillVisible) {
+      stopGeneratedAssetPreview();
+      return;
+    }
+    const item = items.find((entry) => entry.id === resumePreview.id);
+    if (item) {
+      playGeneratedAssetPreview(item, { fromIndex: resumePreview.index, resume: true });
+    }
+  }
+}
+
 async function loadPromptLibrary() {
   state.promptLibrary = await api('/api/prompts');
+  syncPromptBindingsForMode();
   renderPromptLibrary();
+  updateFlipbookUi();
 }
 
 async function openPromptLibrary({ pickTemplate = false } = {}) {
   closeLibraryPanel();
-  state.flipbook.pickingTemplate = Boolean(pickTemplate);
+  closeCaptionTrackPanel();
+  closeGeneratedAssetsPanel();
+  state.flipbook.pickingTemplate = pickTemplate ? els.genMode.value : false;
   els.promptLibrarySearch.value = '';
   els.promptLibraryPanel.hidden = false;
   els.promptLibraryBackdrop.hidden = false;
@@ -750,14 +2014,21 @@ function cancelPromptEdit() {
 }
 
 function useLibraryPrompt(item) {
-  if (state.flipbook.pickingTemplate || els.genMode.value === 'flipbook') {
-    const hasPlaceholders = /\{(frameCount|columns|rows|userPrompt)\}/.test(item.content);
+  const mode = els.genMode.value;
+  const role = promptRole(item);
+  if (!promptUsableInMode(item, mode)) {
+    setGenStatus(`“${PROMPT_ROLE_LABELS[role] || role}”模板不适用于当前模式`, 'error');
+    return;
+  }
+  if (role === 'flipbook') {
+    const hasPlaceholders = /\{(?:frameCount|sheetFrameCount|columns|rows)\}/.test(item.content);
     if (!hasPlaceholders) {
-      setGenStatus('该提词没有翻页占位符。可参考 docs/flipbook-prompt.md', 'error');
+      setGenStatus('翻页图集模板缺少帧数或网格占位符', 'error');
+      return;
     }
-    setFlipbookTemplate(item);
+    if (!setFlipbookTemplate(item)) return;
     closePromptLibraryPanel();
-    setGenStatus(`已选用翻页模板：${item.name}`, hasPlaceholders ? 'success' : 'error');
+    setGenStatus(`已绑定翻页图集模板：${item.name}`, 'success');
     return;
   }
   els.genPrompt.value = item.content;
@@ -769,9 +2040,21 @@ function useLibraryPrompt(item) {
 function renderPromptLibrary() {
   const items = state.promptLibrary.items || [];
   const query = els.promptLibrarySearch.value.trim().toLowerCase();
-  const visibleItems = items.filter((item) =>
-    `${item.name} ${item.content}`.toLowerCase().includes(query),
-  );
+  const mode = els.genMode.value;
+  const bindings = promptBindingsForMode(mode);
+  const modeConfig = promptModeConfig(mode);
+  const visibleItems = items.filter((item) => {
+    if (state.flipbook.pickingTemplate === 'flipbook' && promptRole(item) !== 'flipbook') {
+      return false;
+    }
+    if (
+      state.flipbook.pickingTemplate === 'chain32' &&
+      !modeConfig.requiredRoles.includes(promptRole(item))
+    ) {
+      return false;
+    }
+    return `${item.name} ${item.content}`.toLowerCase().includes(query);
+  });
   els.promptLibraryList.innerHTML = '';
 
   if (visibleItems.length === 0) {
@@ -782,27 +2065,49 @@ function renderPromptLibrary() {
   }
 
   for (const item of visibleItems) {
+    const role = promptRole(item);
+    const roleLabel = PROMPT_ROLE_LABELS[role] || role;
+    const usable = promptUsableInMode(item, mode);
+    const automaticallyBound =
+      mode === 'chain32' &&
+      ((role === 'anchored-keyframe' && bindings.keyframe?.id === item.id) ||
+        (role === 'anchored-segment' && bindings.segment?.id === item.id));
+    const atlasBound = role === 'flipbook' && bindings.atlas?.id === item.id && mode !== 'single';
+    const useLabel = automaticallyBound
+      ? '已自动绑定'
+      : atlasBound
+        ? '当前已绑定'
+        : usable
+          ? role === 'flipbook'
+            ? '绑定到当前模式'
+            : '使用此提词'
+          : '不适用于当前模式';
     const card = document.createElement('article');
-    card.className = 'prompt-library-card';
+    card.className = `prompt-library-card${usable || automaticallyBound ? '' : ' is-incompatible'}`;
     card.innerHTML = `
       <div class="prompt-library-card-header">
-        <strong>${escapeHtml(item.name)}</strong>
+        <strong>${escapeHtml(item.name)}${
+          roleLabel ? ` <em class="prompt-role-tag">${roleLabel}</em>` : ''
+        }</strong>
         <div class="prompt-library-card-tools">
           <button type="button" class="prompt-card-edit" aria-label="编辑">编辑</button>
-          <button type="button" class="prompt-card-delete" aria-label="删除">×</button>
+          <button type="button" class="prompt-card-delete" aria-label="删除"${SYSTEM_PROMPT_IDS.has(item.id) ? ' disabled title="系统模板不可删除，可直接编辑"' : ''}>×</button>
         </div>
       </div>
       <p>${escapeHtml(item.content)}</p>
-      <button type="button" class="btn btn-primary btn-sm prompt-card-use">${
-        state.flipbook.pickingTemplate || els.genMode.value === 'flipbook'
-          ? '选作翻页模板'
-          : '使用此提词'
-      }</button>
+      <button type="button" class="btn btn-primary btn-sm prompt-card-use"${!usable || automaticallyBound || atlasBound ? ' disabled' : ''}>${useLabel}</button>
     `;
     card.querySelector('.prompt-card-use').addEventListener('click', () => useLibraryPrompt(item));
     card.querySelector('.prompt-card-edit').addEventListener('click', () => startPromptEdit(item));
     card.querySelector('.prompt-card-delete').addEventListener('click', async () => {
-      if (!confirm(`删除提词「${item.name}」？`)) return;
+      if (SYSTEM_PROMPT_IDS.has(item.id)) return;
+      const confirmed = await openAppDialog({
+        title: '删除提词',
+        message: `确定删除「${item.name}」？此操作无法撤销。`,
+        confirmLabel: '删除提词',
+        tone: 'danger',
+      });
+      if (!confirmed) return;
       try {
         await api(`/api/prompts/${item.id}`, { method: 'DELETE' });
         await loadPromptLibrary();
@@ -874,7 +2179,13 @@ function renderLibraryGrid() {
 
     card.querySelector('.library-card-delete').addEventListener('click', async (e) => {
       e.stopPropagation();
-      if (!confirm(`从设定集删除「${item.name}」？`)) return;
+      const confirmed = await openAppDialog({
+        title: '删除设定',
+        message: `确定从设定集删除「${item.name}」？`,
+        confirmLabel: '删除设定',
+        tone: 'danger',
+      });
+      if (!confirmed) return;
       await api(`/api/library/${item.id}`, { method: 'DELETE' });
       removeGenRef(item.imageUrl);
       await loadLibrary();
@@ -885,8 +2196,18 @@ function renderLibraryGrid() {
   updateReferenceCount();
 }
 
-function showLibraryNameModal(imageUrl, defaultName = '') {
+function showLibraryNameModal(
+  imageUrl,
+  defaultName = '',
+  target = 'library',
+  metadata = null,
+) {
   state.pendingLibraryImageUrl = imageUrl;
+  state.pendingLibraryTarget = target;
+  state.pendingLibraryMetadata = metadata;
+  els.libraryNameTitle.textContent = target === 'generated-frame' ? '保存当前帧' : '加入设定集';
+  els.libraryNameInput.placeholder =
+    target === 'generated-frame' ? '例如：转身中间帧' : '例如：主角形象、办公室场景';
   els.libraryNameInput.value = defaultName;
   els.libraryNameModal.hidden = false;
   els.libraryNameInput.focus();
@@ -895,6 +2216,8 @@ function showLibraryNameModal(imageUrl, defaultName = '') {
 function hideLibraryNameModal() {
   els.libraryNameModal.hidden = true;
   state.pendingLibraryImageUrl = null;
+  state.pendingLibraryTarget = 'library';
+  state.pendingLibraryMetadata = null;
 }
 
 async function saveToLibrary(imageUrl, name) {
@@ -937,18 +2260,64 @@ function requestAddCurrentToLibrary() {
   const imageUrl = frameIndex >= 0 ? animation.frameUrls[frameIndex] : node.imageUrl;
   const defaultName =
     frameIndex >= 0 ? `${node.title || '分镜'} - 帧 ${frameIndex + 1}` : node.title || '';
-  showLibraryNameModal(imageUrl, defaultName);
+  showLibraryNameModal(imageUrl, defaultName, 'library');
+}
+
+function requestSaveCurrentFrame() {
+  const node = selectedNode();
+  const animation = nodeAnimation(node);
+  if (!node || !animation) return;
+  const frameIndex = Math.max(
+    0,
+    Math.min(animation.frameUrls.length - 1, state.flipbook.previewIndex),
+  );
+  const imageUrl = animation.frameUrls[frameIndex];
+  const sourceAsset = (state.generatedAssets.items || []).find(
+    (item) => item.type === 'animation' && item.animation?.frameUrls?.includes(imageUrl),
+  );
+  showLibraryNameModal(
+    imageUrl,
+    `${node.title || '分镜'} - 帧 ${frameIndex + 1}`,
+    'generated-frame',
+    {
+      nodeId: node.id,
+      frameIndex,
+      prompt: node.imagePrompt || '',
+      sourceAssetId: sourceAsset?.id || null,
+    },
+  );
+}
+
+async function saveFrameToGeneratedAssets(imageUrl, name, metadata = {}) {
+  const asset = await api('/api/generated-assets/from-frame', {
+    method: 'POST',
+    body: JSON.stringify({ imageUrl, name, ...metadata }),
+  });
+  const index = (state.generatedAssets.items || []).findIndex((item) => item.id === asset.id);
+  if (index >= 0) state.generatedAssets.items[index] = asset;
+  else state.generatedAssets.items.unshift(asset);
+  if (!els.generatedAssetsPanel.hidden) renderGeneratedAssets();
+  setGenStatus(`当前帧已保存到素材仓库：${name}`, 'success');
 }
 
 async function confirmAddToLibrary() {
   const url = state.pendingLibraryImageUrl;
+  const target = state.pendingLibraryTarget;
+  const metadata = state.pendingLibraryMetadata;
   const name = els.libraryNameInput.value.trim() || '未命名参考';
   if (!url) return;
   hideLibraryNameModal();
   try {
-    await saveToLibrary(url, name);
+    if (target === 'generated-frame') {
+      await saveFrameToGeneratedAssets(url, name, metadata || {});
+    } else {
+      await saveToLibrary(url, name);
+    }
   } catch (err) {
-    setGenStatus(err.message, 'error');
+    setGenStatus(
+      `${target === 'generated-frame' ? '保存当前帧失败' : '加入设定集失败'}：${err.message}`,
+      'error',
+    );
   }
 }
 
@@ -994,22 +2363,35 @@ function setImagePreviewAspectFromSize(size) {
 }
 
 function renderImagePreview(url) {
-  if (url) {
-    els.imagePreview.innerHTML = `<img src="${url}?t=${Date.now()}" alt="分镜图" />`;
-    const image = els.imagePreview.querySelector('img');
+  if (!url) {
+    els.imagePreview.classList.add('is-empty');
+    els.imagePreview.innerHTML = '<span class="image-placeholder">暂无图片</span>';
+    setImagePreviewAspectFromSize(els.genSize.value);
+    return;
+  }
+
+  els.imagePreview.classList.remove('is-empty');
+  let image = els.imagePreview.querySelector('img');
+  if (!image) {
+    els.imagePreview.innerHTML = '<img alt="分镜图" />';
+    image = els.imagePreview.querySelector('img');
+  }
+
+  image.onclick = (event) => {
+    event.stopPropagation();
+    openLightbox(url, '分镜图');
+  };
+
+  if (image.dataset.sourceUrl !== url) {
     image.addEventListener('load', () => {
       setImagePreviewAspect(image.naturalWidth, image.naturalHeight);
     }, { once: true });
-    if (image.complete && image.naturalWidth) {
-      setImagePreviewAspect(image.naturalWidth, image.naturalHeight);
-    }
-    image.addEventListener('click', (e) => {
-      e.stopPropagation();
-      openLightbox(url, '分镜图');
-    });
-  } else {
-    els.imagePreview.innerHTML = '<span class="image-placeholder">暂无图片</span>';
-    setImagePreviewAspectFromSize(els.genSize.value);
+    image.dataset.sourceUrl = url;
+    image.src = url;
+  }
+
+  if (image.complete && image.naturalWidth) {
+    setImagePreviewAspect(image.naturalWidth, image.naturalHeight);
   }
 }
 
@@ -1044,15 +2426,23 @@ function updateGenerateButton() {
   const gen = generationFor();
   const loading = gen?.status === 'loading';
   els.generateBtn.disabled = !selectedNode() || state.providers.length === 0 || loading;
-  els.generateBtn.textContent = loading
-    ? `生成中 ${Math.round(gen.progress)}%`
-    : els.genMode.value === 'chain32'
-      ? '生成 / 继续 32 帧'
-      : els.genMode.value === 'interpolate32'
-        ? '生成 / 继续关键帧插帧'
-    : els.genMode.value === 'flipbook'
-      ? '生成动画'
-      : '生成图片';
+  if (loading) {
+    els.generateBtn.textContent = `生成中 ${Math.round(gen.progress)}%`;
+    return;
+  }
+  if (els.genMode.value === 'chain32') {
+    const phase = anchoredPhase();
+    els.generateBtn.textContent =
+      phase === 'awaiting-confirm'
+        ? '确认关键帧并生成'
+        : phase === 'segments'
+          ? '继续缺失分段'
+          : phase === 'complete'
+            ? '重新生成关键帧'
+            : '生成中间关键帧';
+    return;
+  }
+  els.generateBtn.textContent = els.genMode.value === 'flipbook' ? '生成动画' : '生成图片';
 }
 
 function updateTimelineGenerationBadge(nodeId) {
@@ -1336,7 +2726,6 @@ function renderEditor() {
     renderGenerationState();
     stopFlipbookPreview();
     loadChain32State(null);
-    renderInterpolationProgress(null);
     updateNodeActions();
     return;
   }
@@ -1354,13 +2743,13 @@ function renderEditor() {
   els.fieldDuration.value = (nodeDuration(node) / 1000).toFixed(1);
   els.fieldCamera.value = node.cameraPreset || 'static';
   els.fieldScript.value = node.script || '';
-  els.fieldSubtitle.value = node.subtitle || '';
 
   const animation = nodeAnimation(node);
   if (animation) {
-    els.genMode.value = ['chain32', 'interpolate32'].includes(animation.mode)
-      ? animation.mode
-      : 'flipbook';
+    els.genMode.value =
+      animation.mode === 'chain32' || animation.mode === 'anchored-chain32'
+        ? 'chain32'
+        : 'flipbook';
     const frameCount = String(animation.frameCount || animation.frameUrls.length);
     if ([...els.flipbookFrames.options].some((opt) => opt.value === frameCount)) {
       els.flipbookFrames.value = frameCount;
@@ -1386,7 +2775,6 @@ function renderEditor() {
   resizePromptComposer();
 
   loadChain32State(node);
-  renderInterpolationProgress(node);
   updateFlipbookUi();
   renderImagePreview(node.imageUrl);
   renderFlipbookResult();
@@ -1556,10 +2944,12 @@ function undoDelete() {
 
 async function loadTimeline() {
   state.timeline = await api('/api/timeline');
+  if (!Array.isArray(state.timeline.captions)) state.timeline.captions = [];
   syncLocalTiming();
   els.timelineTitle.value = state.timeline.title || '';
   renderNodes();
   renderEditor();
+  if (!els.captionTrackPanel.hidden) renderCaptionTrack();
 }
 
 async function loadProviders() {
@@ -1596,13 +2986,19 @@ async function saveNodeFields({ announce = true } = {}) {
     durationMs: Math.min(600000, Math.max(500, Number(els.fieldDuration.value || 2) * 1000)),
     cameraPreset: els.fieldCamera.value || 'static',
     script: els.fieldScript.value,
-    subtitle: els.fieldSubtitle.value,
   };
   if (els.genMode.value === 'flipbook' && node.animation) {
     payload.animation = {
       ...node.animation,
       userPrompt: els.genPrompt.value.trim(),
       fps: normalizeFps(els.flipbookFps.value, node.animation.fps || 4),
+    };
+  } else if (els.genMode.value === 'chain32' && node.animation && isAnyChain32(node.animation)) {
+    payload.animation = {
+      ...node.animation,
+      userPrompt: els.genPrompt.value.trim(),
+      segmentPrompts: chain32PromptValues(),
+      fps: normalizeFps(els.flipbookFps.value, node.animation.fps || 8),
     };
   } else {
     payload.imagePrompt = els.genPrompt.value;
@@ -1667,7 +3063,6 @@ function confirmDeleteNode() {
   cancelPendingDelete();
   const generation = generationFor(node.id);
   generation?.controller?.abort();
-  generation?.controllers?.forEach((controller) => controller.abort());
   clearGenerationTimer(node.id);
   delete state.generations[node.id];
 
@@ -1808,129 +3203,190 @@ async function uploadImage(file) {
   updateImageActions();
 }
 
-async function generateInterpolation32(node, baseRequest) {
+function buildAnchoredChainRequest(previousRequest = null) {
+  const node = previousRequest
+    ? state.timeline.nodes.find((item) => item.id === previousRequest.nodeId)
+    : selectedNode();
+  const [provider, model] = previousRequest
+    ? [previousRequest.provider, previousRequest.model]
+    : els.genProvider.value.split('::');
+  const refs = previousRequest?.referenceUrls || [...getGenRefs()];
+  const segmentPrompts = previousRequest?.segmentPrompts || chain32PromptValues();
+  const userPrompt = previousRequest?.userPrompt ?? els.genPrompt.value.trim();
+  const bindings = promptBindingsForMode('chain32');
   const existing =
-    node.animation?.mode === 'interpolate32' &&
-    node.animation.keyframeUrls?.length === 8 &&
-    (node.animation.interpolations || []).filter(Boolean).length < 7 &&
-    (!baseRequest.chainId || node.animation.chainId === baseRequest.chainId)
+    isAnchoredAnimation(node?.animation) &&
+    (!previousRequest?.chainId || node.animation.chainId === previousRequest.chainId)
       ? node.animation
       : null;
-  const chainId =
-    baseRequest.chainId || existing?.chainId || `interpolate${Date.now().toString(36)}`;
-  const request = { ...baseRequest, chainId };
-  const initialController = new AbortController();
-  const activeGeneration = startGenerationProgress(request, initialController);
+  const restart =
+    previousRequest?.restart ||
+    (!previousRequest && anchoredPhase(existing) === 'complete');
+  const chainId = restart
+    ? `chain${Date.now().toString(36)}`
+    : previousRequest?.chainId || existing?.chainId || `chain${Date.now().toString(36)}`;
+
+  return {
+    mode: 'anchored-chain32',
+    nodeId: node.id,
+    provider,
+    model,
+    prompt: userPrompt || 'anchored-chain',
+    userPrompt,
+    size: previousRequest?.size || els.genSize.value,
+    referenceUrls: refs,
+    fps: previousRequest?.fps || normalizeFps(els.flipbookFps.value, 8),
+    templateId: previousRequest?.templateId ?? bindings.atlas?.id ?? state.flipbook.templateId,
+    atlasTemplateId:
+      previousRequest?.atlasTemplateId ?? bindings.atlas?.id ?? state.flipbook.templateId,
+    keyframeTemplateId:
+      previousRequest?.keyframeTemplateId ?? bindings.keyframe?.id ?? 'panchored-keyframe',
+    segmentTemplateId:
+      previousRequest?.segmentTemplateId ?? bindings.segment?.id ?? 'panchored-segment',
+    templateContent:
+      previousRequest?.templateContent ?? bindings.atlas?.content ?? state.flipbook.templateContent,
+    segmentPrompts,
+    chainId,
+    phase: previousRequest?.phase || null,
+    forceKeyframeIndexes: previousRequest?.forceKeyframeIndexes || null,
+    forceSegmentIndexes: previousRequest?.forceSegmentIndexes || null,
+    restart: Boolean(restart),
+  };
+}
+
+async function generateAnchoredKeyframe(request, keyframeIndex, { force = false } = {}) {
+  state.flipbook.keyframeStatus[keyframeIndex] = 'loading';
+  renderChain32Keyframes();
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), GENERATE_TIMEOUT_MS);
+  try {
+    const data = await api('/api/generate-animation-chain/keyframe', {
+      method: 'POST',
+      body: JSON.stringify({
+        ...request,
+        keyframeIndex,
+        force,
+      }),
+      signal: controller.signal,
+    });
+    state.flipbook.keyframeStatus[keyframeIndex] = 'ready';
+    return data;
+  } catch (err) {
+    state.flipbook.keyframeStatus[keyframeIndex] = 'error';
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+    renderChain32Keyframes();
+  }
+}
+
+async function generateAnchoredSegment(request, segmentIndex, { force = false } = {}) {
+  state.flipbook.segmentStatus[segmentIndex] = 'loading';
+  renderChain32Progress();
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), GENERATE_TIMEOUT_MS * 2);
+  const segmentUserPrompt = [request.userPrompt, request.segmentPrompts?.[segmentIndex]]
+    .filter(Boolean)
+    .join('\n');
+  const segmentPrompt = fillFlipbookTemplate(
+    request.templateContent || '',
+    segmentUserPrompt,
+    9,
+  );
+  try {
+    const data = await api('/api/generate-animation-chain/segment', {
+      method: 'POST',
+      body: JSON.stringify({
+        ...request,
+        mode: 'anchored-chain32',
+        prompt: segmentPrompt,
+        segmentIndex,
+        force,
+      }),
+      signal: controller.signal,
+    });
+    state.flipbook.segmentStatus[segmentIndex] = 'ready';
+    return data;
+  } catch (err) {
+    state.flipbook.segmentStatus[segmentIndex] = 'error';
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+    renderChain32Progress();
+  }
+}
+
+function applyAnchoredNode(nodeId, data) {
+  const idx = state.timeline.nodes.findIndex((item) => item.id === nodeId);
+  if (idx >= 0 && data?.node) state.timeline.nodes[idx] = data.node;
+  renderNodes();
+  updateImageActions();
+  updateNodeActions();
+  renderChain32Keyframes(data?.node);
+  renderChain32Progress(data?.node);
+  if (state.selectedId === nodeId) {
+    renderFlipbookResult();
+    if (data?.animation?.frameUrls?.length) {
+      showFlipbookFrame(Math.max(0, data.animation.frameUrls.length - 1));
+    } else if (data?.imageUrl) {
+      renderImagePreview(data.imageUrl);
+    }
+  }
+}
+
+async function generateChain32Keyframes(node, baseRequest, indexes = [1, 2, 3]) {
+  const request = { ...baseRequest, phase: 'keyframes' };
+  const controller = new AbortController();
+  const activeGeneration = startGenerationProgress(request, controller);
   clearGenerationTimer(node.id);
   activeGeneration.lastRequest = request;
-  activeGeneration.controllers = new Set();
-  let currentNode = node;
-  let completedGaps = existing?.interpolations?.filter(Boolean).length || 0;
-
-  const applyResponseNode = (data) => {
-    const incomingCompleted = data.node?.animation?.interpolations?.filter(Boolean).length || 0;
-    const localCompleted =
-      currentNode.animation?.mode === 'interpolate32'
-        ? currentNode.animation.interpolations?.filter(Boolean).length || 0
-        : -1;
-    if (incomingCompleted >= localCompleted) currentNode = data.node;
-    const idx = state.timeline.nodes.findIndex((item) => item.id === node.id);
-    if (idx >= 0 && incomingCompleted >= localCompleted) state.timeline.nodes[idx] = data.node;
-  };
-
-  const updateProgress = (message) => {
-    activeGeneration.progress = Math.min(99, 25 + (completedGaps / 7) * 75);
-    activeGeneration.message = message;
-    updateTimelineGenerationBadge(node.id);
-    renderNodes();
-    renderInterpolationProgress(currentNode);
-    if (state.selectedId === node.id) {
-      renderFlipbookResult();
-      renderGenerationState();
-      setGenStatus(message, 'loading');
-    }
-  };
+  activeGeneration.progress = 5;
+  activeGeneration.message = `并行生成关键帧 ${indexes.map((i) => `K${i}`).join(' / ')}…`;
+  if (state.selectedId === node.id) {
+    setGenStatus(activeGeneration.message, 'loading');
+    renderGenerationState();
+    renderChain32Keyframes(node);
+  }
 
   try {
-    if (!existing) {
-      activeGeneration.controllers.add(initialController);
-      activeGeneration.progress = 3;
-      activeGeneration.message = '阶段 1 / 2：正在生成 8 个关键帧…';
-      if (state.selectedId === node.id) {
-        setGenStatus(activeGeneration.message, 'loading');
-        renderGenerationState();
-      }
-      const timeoutId = setTimeout(() => initialController.abort(), GENERATE_TIMEOUT_MS);
-      let data;
-      try {
-        data = await api('/api/generate-interpolation/keyframes', {
-          method: 'POST',
-          body: JSON.stringify(request),
-          signal: initialController.signal,
-        });
-      } finally {
-        clearTimeout(timeoutId);
-        activeGeneration.controllers.delete(initialController);
-      }
-      applyResponseNode(data);
-      renderInterpolationProgress(currentNode);
-      updateProgress('阶段 1 / 2 完成：8 个关键帧已就绪');
-    } else {
-      activeGeneration.progress = 25 + (completedGaps / 7) * 75;
-      renderInterpolationProgress(currentNode);
-    }
-
-    const missingGaps = Array.from({ length: 7 }, (_, index) => index).filter(
-      (index) => !currentNode.animation?.interpolations?.[index],
+    const results = await Promise.allSettled(
+      indexes.map((keyframeIndex) =>
+        generateAnchoredKeyframe(request, keyframeIndex, {
+          force: Boolean(baseRequest.forceKeyframeIndexes?.includes(keyframeIndex)),
+        }).then((data) => {
+          applyAnchoredNode(node.id, data);
+          const done = indexes.filter((i) => state.flipbook.keyframeStatus[i] === 'ready').length;
+          activeGeneration.progress = Math.min(39, 5 + (done / indexes.length) * 34);
+          activeGeneration.message = `关键帧进度 ${done}/${indexes.length}`;
+          updateTimelineGenerationBadge(node.id);
+          if (state.selectedId === node.id) renderGenerationState();
+          return data;
+        }),
+      ),
     );
-    let queueIndex = 0;
-    const worker = async () => {
-      while (queueIndex < missingGaps.length) {
-        const gapIndex = missingGaps[queueIndex];
-        queueIndex += 1;
-        const controller = new AbortController();
-        activeGeneration.controllers.add(controller);
-        const timeoutId = setTimeout(() => controller.abort(), GENERATE_TIMEOUT_MS);
-        updateProgress(
-          `阶段 2 / 2：正在补帧 ${gapIndex + 1}→${gapIndex + 2}（${completedGaps} / 7 组完成）`,
-        );
-        let data;
-        try {
-          data = await api('/api/generate-interpolation/gap', {
-            method: 'POST',
-            body: JSON.stringify({
-              ...request,
-              prompt: fillFlipbookTemplate(request.templateContent, request.userPrompt, 4),
-              gapIndex,
-            }),
-            signal: controller.signal,
-          });
-        } finally {
-          clearTimeout(timeoutId);
-          activeGeneration.controllers.delete(controller);
-        }
-        applyResponseNode(data);
-        completedGaps = Math.max(completedGaps, data.completedGaps || 0);
-        updateProgress(`阶段 2 / 2：相邻帧补帧已完成 ${completedGaps} / 7 组`);
-      }
-    };
-    await Promise.all([worker(), worker()]);
 
-    const latestTimeline = await api('/api/timeline');
-    const latestNode = latestTimeline.nodes.find((item) => item.id === node.id);
-    if (latestNode) {
-      currentNode = latestNode;
-      const idx = state.timeline.nodes.findIndex((item) => item.id === node.id);
-      if (idx >= 0) state.timeline.nodes[idx] = latestNode;
+    const latest = state.timeline.nodes.find((item) => item.id === node.id) || node;
+    const failures = results
+      .map((result, index) => ({ result, keyframeIndex: indexes[index] }))
+      .filter(({ result }) => result.status === 'rejected');
+
+    if (failures.length) {
+      const message = failures
+        .map(({ keyframeIndex, result }) => `K${keyframeIndex}: ${result.reason?.message || '失败'}`)
+        .join('；');
+      finishGeneration(node.id, 'error', message);
+      if (state.selectedId === node.id) {
+        setGenStatus(`${message}（可单独重生成失败的关键帧）`, 'error');
+        renderChain32Keyframes(latest);
+      }
+      return;
     }
-    const completedGeneration = finishGeneration(node.id, 'success', '8 关键帧 → 32 帧生成完成');
-    renderNodes();
-    renderInterpolationProgress(currentNode);
+
+    const completedGeneration = finishGeneration(node.id, 'success', '中间关键帧已就绪，请确认');
     if (state.selectedId === node.id) {
-      renderImagePreview(currentNode.imageUrl);
-      renderFlipbookResult();
-      showFlipbookFrame(0);
-      setGenStatus('两阶段生成完成：8 个关键帧已补齐为 32 帧', 'success');
+      setGenStatus('K1 / K2 / K3 已生成，请确认后开始四段并行生成', 'success');
+      renderChain32Keyframes(latest);
+      updateFlipbookUi();
     }
     setTimeout(() => {
       if (
@@ -1944,88 +3400,79 @@ async function generateInterpolation32(node, baseRequest) {
       }
     }, 900);
   } catch (err) {
-    activeGeneration.controllers.forEach((controller) => controller.abort());
     if (state.generations[node.id] === activeGeneration) {
       finishGeneration(node.id, 'error', err.message);
-      if (state.selectedId === node.id) {
-        setGenStatus(
-          `${err.message}（关键帧与已完成的 ${completedGaps} / 7 组补帧已保存，可重试继续）`,
-          'error',
-        );
-      }
+      if (state.selectedId === node.id) setGenStatus(err.message, 'error');
     }
   } finally {
     if (state.selectedId === node.id) renderGenerationState();
   }
 }
 
-async function generateChain32(node, baseRequest) {
-  const existing =
-    node.animation?.mode === 'chain32' &&
-    node.animation.segments?.length < 4 &&
-    (!baseRequest.chainId || node.animation.chainId === baseRequest.chainId)
-      ? node.animation
-      : null;
-  const chainId =
-    baseRequest.chainId || existing?.chainId || `chain${Date.now().toString(36)}`;
-  const request = { ...baseRequest, chainId };
-  let startIndex = existing?.segments?.length || 0;
-  const firstController = new AbortController();
-  const activeGeneration = startGenerationProgress(request, firstController);
+async function generateChain32Segments(node, baseRequest, indexes = [0, 1, 2, 3]) {
+  const request = { ...baseRequest, phase: 'segments' };
+  const controller = new AbortController();
+  const activeGeneration = startGenerationProgress(request, controller);
   clearGenerationTimer(node.id);
   activeGeneration.lastRequest = request;
-  activeGeneration.progress = startIndex * 25;
+  activeGeneration.progress = 45;
+  activeGeneration.message = `并行生成分段 ${indexes.map((i) => i + 1).join('/')}…`;
+  if (state.selectedId === node.id) {
+    setGenStatus(activeGeneration.message, 'loading');
+    renderGenerationState();
+  }
 
   try {
-    for (let segmentIndex = startIndex; segmentIndex < 4; segmentIndex += 1) {
-      const controller = segmentIndex === startIndex ? firstController : new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), GENERATE_TIMEOUT_MS);
-      activeGeneration.controller = controller;
-      activeGeneration.progress = segmentIndex * 25 + 2;
-      activeGeneration.message = `正在生成第 ${segmentIndex + 1} / 4 段…`;
-      updateTimelineGenerationBadge(node.id);
+    const confirmData = await api('/api/generate-animation-chain/confirm-keyframes', {
+      method: 'POST',
+      body: JSON.stringify({ nodeId: node.id, chainId: request.chainId }),
+    });
+    applyAnchoredNode(node.id, confirmData);
+
+    const results = await Promise.allSettled(
+      indexes.map((segmentIndex) =>
+        generateAnchoredSegment(request, segmentIndex, {
+          force: Boolean(baseRequest.forceSegmentIndexes?.includes(segmentIndex)),
+        }).then((data) => {
+          applyAnchoredNode(node.id, data);
+          const slots = anchoredSegmentSlots(data.animation);
+          const done = slots.filter(Boolean).length;
+          activeGeneration.progress = 45 + (done / 4) * 55;
+          activeGeneration.message = `分段进度 ${done}/4`;
+          updateTimelineGenerationBadge(node.id);
+          if (state.selectedId === node.id) renderGenerationState();
+          return data;
+        }),
+      ),
+    );
+
+    const latest = state.timeline.nodes.find((item) => item.id === node.id) || node;
+    const failures = results
+      .map((result, index) => ({ result, segmentIndex: indexes[index] }))
+      .filter(({ result }) => result.status === 'rejected');
+
+    if (failures.length) {
+      const message = failures
+        .map(
+          ({ segmentIndex, result }) =>
+            `第 ${segmentIndex + 1} 段: ${result.reason?.message || '失败'}`,
+        )
+        .join('；');
+      finishGeneration(node.id, 'error', message);
       if (state.selectedId === node.id) {
-        setGenStatus(activeGeneration.message, 'loading');
-        renderGenerationState();
+        setGenStatus(`${message}（可继续重试缺失分段）`, 'error');
+        renderChain32Progress(latest);
+        updateFlipbookUi();
       }
-
-      const segmentUserPrompt = [request.userPrompt, request.segmentPrompts?.[segmentIndex]]
-        .filter(Boolean)
-        .join('\n');
-      const segmentPrompt = fillFlipbookTemplate(request.templateContent, segmentUserPrompt, 8);
-
-      let data;
-      try {
-        data = await api('/api/generate-animation-chain/segment', {
-          method: 'POST',
-          body: JSON.stringify({
-            ...request,
-            prompt: segmentPrompt,
-            segmentIndex,
-          }),
-          signal: controller.signal,
-        });
-      } finally {
-        clearTimeout(timeoutId);
-      }
-
-      const idx = state.timeline.nodes.findIndex((item) => item.id === node.id);
-      if (idx >= 0) state.timeline.nodes[idx] = data.node;
-      activeGeneration.progress = (segmentIndex + 1) * 25;
-      activeGeneration.message = `第 ${segmentIndex + 1} / 4 段完成`;
-      renderNodes();
-      renderChain32Progress(data.node);
-      if (state.selectedId === node.id) {
-        renderFlipbookResult();
-        showFlipbookFrame(Math.max(0, data.animation.frameUrls.length - 1));
-        renderGenerationState();
-      }
-      startIndex = segmentIndex + 1;
+      return;
     }
 
-    const completedGeneration = finishGeneration(node.id, 'success', '32 帧接力生成完成');
+    const completedGeneration = finishGeneration(node.id, 'success', '32 帧锚点接力完成');
     if (state.selectedId === node.id) {
       setGenStatus('32 个独立画面已生成并应用到节点', 'success');
+      renderFlipbookResult();
+      showFlipbookFrame(0);
+      updateFlipbookUi();
     }
     setTimeout(() => {
       if (
@@ -2041,13 +3488,128 @@ async function generateChain32(node, baseRequest) {
   } catch (err) {
     if (state.generations[node.id] === activeGeneration) {
       finishGeneration(node.id, 'error', err.message);
-      if (state.selectedId === node.id) {
-        setGenStatus(`${err.message}（已完成 ${startIndex} / 4 段，可重试继续）`, 'error');
-      }
+      if (state.selectedId === node.id) setGenStatus(err.message, 'error');
     }
   } finally {
     if (state.selectedId === node.id) renderGenerationState();
   }
+}
+
+async function regenerateAnchoredKeyframe(keyframeIndex) {
+  const node = selectedNode();
+  if (!node || generationFor(node.id)?.status === 'loading') return;
+  if (getGenRefs().length < 2) {
+    setGenStatus('需要 @1 首帧与 @2 尾帧参考图', 'error');
+    return;
+  }
+  if (!els.genPrompt.value.trim()) {
+    setGenStatus('请填写 32 帧动画的主提示词', 'error');
+    return;
+  }
+  const request = buildAnchoredChainRequest({
+    ...buildAnchoredChainRequest(),
+    forceKeyframeIndexes: [keyframeIndex],
+    phase: 'keyframes',
+  });
+  await generateChain32Keyframes(node, request, [keyframeIndex]);
+}
+
+async function confirmAnchoredKeyframesAndGenerate() {
+  const node = selectedNode();
+  if (!node || generationFor(node.id)?.status === 'loading') return;
+  if (!isAnchoredAnimation(node.animation)) {
+    setGenStatus('请先生成中间关键帧', 'error');
+    return;
+  }
+  const slots = anchoredSegmentSlots(node.animation);
+  const missing = [];
+  for (let i = 0; i < 4; i += 1) {
+    if (!slots[i]) missing.push(i);
+  }
+  const request = buildAnchoredChainRequest({
+    chainId: node.animation.chainId,
+    phase: 'segments',
+    forceSegmentIndexes: missing.length && missing.length < 4 ? missing : null,
+  });
+  await generateChain32Segments(node, request, missing.length ? missing : [0, 1, 2, 3]);
+}
+
+async function generateChain32(node, baseRequest) {
+  const refs = baseRequest.referenceUrls || getGenRefs();
+  if (refs.length < 2) {
+    setGenStatus('32 帧锚点接力需要至少两张参考图：@1 首帧 K0，@2 尾帧 K4', 'error');
+    return;
+  }
+  if (!baseRequest.userPrompt?.trim()) {
+    setGenStatus('请填写 32 帧动画的主提示词', 'error');
+    return;
+  }
+  const bindings = promptBindingsForMode('chain32');
+  if (!bindings.atlas) {
+    setGenStatus('提词库缺少“翻页图集”模板，请打开提词库确认', 'error');
+    return;
+  }
+  if (!bindings.keyframe) {
+    setGenStatus('提词库缺少「32帧锚点·中间关键帧」，请打开提词库确认', 'error');
+    return;
+  }
+  if (!bindings.segment) {
+    setGenStatus('提词库缺少「32帧锚点·分段约束」，请打开提词库确认', 'error');
+    return;
+  }
+  baseRequest.templateId ||= bindings.atlas.id;
+  baseRequest.atlasTemplateId ||= bindings.atlas.id;
+  baseRequest.keyframeTemplateId ||= bindings.keyframe.id;
+  baseRequest.segmentTemplateId ||= bindings.segment.id;
+  baseRequest.templateContent ||= bindings.atlas.content;
+  if (!baseRequest.templateContent) {
+    const fallback = bindings.atlas;
+    if (fallback) {
+      baseRequest.templateId = fallback.id;
+      baseRequest.templateContent = fallback.content;
+      if (!state.flipbook.templateContent) setFlipbookTemplate(fallback);
+    }
+  }
+
+  const animation = node.animation;
+  const sameChain =
+    isAnchoredAnimation(animation) && animation.chainId === baseRequest.chainId;
+  const phase = baseRequest.phase || (sameChain ? anchoredPhase(animation) : 'keyframes');
+
+  if (phase === 'segments' || phase === 'awaiting-confirm') {
+    const slots = sameChain ? anchoredSegmentSlots(animation) : [null, null, null, null];
+    if (phase === 'awaiting-confirm' || sameChain?.keyframesConfirmed) {
+      const missing = [];
+      for (let i = 0; i < 4; i += 1) {
+        if (!slots[i]) missing.push(i);
+      }
+      if (sameChain?.keyframesConfirmed && missing.length === 0 && !baseRequest.restart) {
+        setGenStatus('32 帧已完成；点“重新生成关键帧”可开新链条', 'success');
+        return;
+      }
+      return generateChain32Segments(
+        node,
+        baseRequest,
+        missing.length ? missing : [0, 1, 2, 3],
+      );
+    }
+  }
+
+  if (phase === 'complete' || baseRequest.restart) {
+    state.flipbook.keyframeStatus = {};
+    state.flipbook.segmentStatus = {};
+  }
+
+  const existingUrls = sameChain ? animation.keyframeUrls || [] : [];
+  const indexes =
+    baseRequest.forceKeyframeIndexes?.length
+      ? baseRequest.forceKeyframeIndexes
+      : [1, 2, 3].filter((index) => !existingUrls[index] || baseRequest.restart);
+  return generateChain32Keyframes(
+    node,
+    { ...baseRequest, restart: Boolean(baseRequest.restart) },
+    indexes.length ? indexes : [1, 2, 3],
+  );
 }
 
 async function generateImage(previousRequest = null) {
@@ -2058,47 +3620,30 @@ async function generateImage(previousRequest = null) {
   if (generationFor(node.id)?.status === 'loading') return;
 
   const mode = previousRequest?.mode || els.genMode.value || 'single';
+  if (mode === 'chain32' || mode === 'anchored-chain32') {
+    const request =
+      previousRequest?.mode === 'anchored-chain32' || previousRequest?.mode === 'chain32'
+        ? {
+            ...previousRequest,
+            mode: 'anchored-chain32',
+            segmentPrompts: previousRequest.segmentPrompts || chain32PromptValues(),
+          }
+        : buildAnchoredChainRequest();
+    return generateChain32(node, request);
+  }
+
   const [provider, model] = previousRequest
     ? [previousRequest.provider, previousRequest.model]
     : els.genProvider.value.split('::');
 
   let prompt = previousRequest?.prompt;
   let frameCount;
+  let outputFrameCount;
   let columns;
   let rows;
   let fps;
-  let segmentPrompts;
 
-  if (!previousRequest && mode === 'interpolate32') {
-    const masterPrompt = els.genPrompt.value.trim();
-    if (!state.flipbook.templateContent) {
-      setGenStatus('请先从提词库选用翻页模板', 'error');
-      return;
-    }
-    if (!masterPrompt) {
-      setGenStatus('请填写关键帧动画的主提示词', 'error');
-      return;
-    }
-    prompt = fillFlipbookTemplate(state.flipbook.templateContent, masterPrompt, 8);
-    fps = normalizeFps(els.flipbookFps.value, 8);
-  } else if (!previousRequest && mode === 'chain32') {
-    const masterPrompt = els.genPrompt.value.trim();
-    segmentPrompts = chain32PromptValues();
-    if (!state.flipbook.templateContent) {
-      setGenStatus('请先从提词库选用翻页模板', 'error');
-      return;
-    }
-    if (!masterPrompt) {
-      setGenStatus('请填写 32 帧动画的主提示词', 'error');
-      return;
-    }
-    prompt = fillFlipbookTemplate(
-      state.flipbook.templateContent,
-      [masterPrompt, segmentPrompts[0]].filter(Boolean).join('\n'),
-      8,
-    );
-    fps = normalizeFps(els.flipbookFps.value, 8);
-  } else if (!previousRequest && mode === 'flipbook') {
+  if (!previousRequest && mode === 'flipbook') {
     const composed = composeFlipbookPrompt();
     if (!state.flipbook.templateContent) {
       setGenStatus('请先从提词库选用翻页模板（见 docs/flipbook-prompt.md）', 'error');
@@ -2114,16 +3659,13 @@ async function generateImage(previousRequest = null) {
     }
     prompt = composed.prompt;
     frameCount = composed.frameCount;
+    outputFrameCount = composed.outputFrameCount;
     columns = composed.columns;
     rows = composed.rows;
     fps = normalizeFps(els.flipbookFps.value, 4);
-  } else if (previousRequest?.mode === 'interpolate32') {
-    fps = previousRequest.fps;
-  } else if (previousRequest?.mode === 'chain32') {
-    fps = previousRequest.fps;
-    segmentPrompts = previousRequest.segmentPrompts;
   } else if (previousRequest?.mode === 'flipbook') {
     frameCount = previousRequest.frameCount;
+    outputFrameCount = previousRequest.outputFrameCount;
     columns = previousRequest.columns;
     rows = previousRequest.rows;
     fps = previousRequest.fps;
@@ -2149,36 +3691,15 @@ async function generateImage(previousRequest = null) {
     ...(mode === 'flipbook'
       ? {
           frameCount,
+          outputFrameCount,
           columns,
           rows,
           fps,
           templateId: state.flipbook.templateId,
-        }
-      : {}),
-    ...(mode === 'chain32'
-      ? {
-          fps,
-          templateId: previousRequest?.templateId ?? state.flipbook.templateId,
-          templateContent: previousRequest?.templateContent ?? state.flipbook.templateContent,
-          segmentPrompts: segmentPrompts || previousRequest?.segmentPrompts || ['', '', '', ''],
-          chainId: previousRequest?.chainId,
-        }
-      : {}),
-    ...(mode === 'interpolate32'
-      ? {
-          fps,
-          templateId: previousRequest?.templateId ?? state.flipbook.templateId,
-          templateContent: previousRequest?.templateContent ?? state.flipbook.templateContent,
-          chainId: previousRequest?.chainId,
+          templateContent: state.flipbook.templateContent,
         }
       : {}),
   };
-  if (mode === 'interpolate32') {
-    return generateInterpolation32(node, request);
-  }
-  if (mode === 'chain32') {
-    return generateChain32(node, request);
-  }
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), GENERATE_TIMEOUT_MS);
   if (state.selectedId === node.id) {
@@ -2199,6 +3720,8 @@ async function generateImage(previousRequest = null) {
       state.timeline.nodes[idx] = data.node;
     }
     renderNodes();
+    updateImageActions();
+    updateNodeActions();
     const completedGeneration = finishGeneration(
       node.id,
       'success',
@@ -2266,9 +3789,7 @@ function renderPreviewScene(index, localElapsed = 0) {
   els.previewSceneTime.textContent = formatTime(previewStartForIndex(index));
   els.previewSceneTitle.textContent = node.title || '未命名节点';
   els.previewSceneCamera.textContent = CAMERA_LABELS[node.cameraPreset] || CAMERA_LABELS.static;
-  const subtitle = nodeSubtitle(node);
-  els.previewCaption.textContent = subtitle;
-  els.previewCaption.hidden = !subtitle;
+  renderPreviewCaption(previewStartForIndex(index) + localElapsed);
   els.previewNoImage.hidden = true;
 
   const animation = nodeAnimation(node);
@@ -2331,6 +3852,7 @@ function previewTick(now) {
   if (nodeAnimation(node) || scene.index !== state.preview.currentIndex) {
     renderPreviewScene(scene.index, scene.localElapsed);
   }
+  renderPreviewCaption(state.preview.elapsed);
   updatePreviewProgress();
   state.preview.rafId = requestAnimationFrame(previewTick);
 }
@@ -2469,7 +3991,10 @@ function bindEvents() {
       setGenStatus(`预览前保存失败：${err.message}`, 'error');
     }
   });
-  els.workbenchPreviewBtn.addEventListener('click', () => els.previewBtn.click());
+  els.workbenchPreviewBtn.addEventListener('click', () => {
+    if (state.flipbook.previewPlaying) stopFlipbookPreview();
+    else playFlipbookPreview();
+  });
   bindPanelResizer(els.timelineResizer, 'timeline');
   bindPanelResizer(els.editorResizer, 'editor');
 
@@ -2526,7 +4051,6 @@ function bindEvents() {
   [
     els.fieldTitle,
     els.fieldScript,
-    els.fieldSubtitle,
     els.genPrompt,
   ].forEach((field) => field.addEventListener('input', scheduleAutoSave));
   els.fieldTitle.addEventListener('input', () => {
@@ -2597,13 +4121,17 @@ function bindEvents() {
 
   els.genMode.addEventListener('change', () => {
     updateFlipbookUi();
-    renderInterpolationProgress();
     updateGenerateButton();
+    renderRefChips();
+    if (!els.promptLibraryPanel.hidden) renderPromptLibrary();
     if (els.genMode.value === 'single') stopFlipbookPreview();
   });
   els.flipbookFrames.addEventListener('change', updateFlipbookUi);
   els.chain32SegmentPrompts.forEach((input) => {
     input.addEventListener('input', updateFlipbookUi);
+  });
+  els.chain32ConfirmBtn?.addEventListener('click', () => {
+    confirmAnchoredKeyframesAndGenerate();
   });
   els.flipbookFps.addEventListener('change', () => {
     persistFlipbookFps();
@@ -2621,7 +4149,7 @@ function bindEvents() {
     resizePromptComposer();
     renderPromptReferenceTags();
     renderReferenceMentionMenu();
-    if (['flipbook', 'chain32', 'interpolate32'].includes(els.genMode.value)) {
+    if (els.genMode.value === 'flipbook' || els.genMode.value === 'chain32') {
       updateFlipbookUi();
     }
   });
@@ -2677,6 +4205,59 @@ function bindEvents() {
   els.libraryDoneBtn.addEventListener('click', closeLibraryPanel);
   els.librarySearch.addEventListener('input', renderLibraryGrid);
 
+  els.captionTrackBtn.addEventListener('click', openCaptionTrackPanel);
+  els.openCaptionTrackEditor.addEventListener('click', openCaptionTrackPanel);
+  els.closeCaptionTrack.addEventListener('click', closeCaptionTrackPanel);
+  els.captionTrackBackdrop.addEventListener('click', closeCaptionTrackPanel);
+  els.captionPreviewImage.addEventListener('load', updateCaptionPreviewAspect);
+  els.captionZoom.addEventListener('input', (event) => setCaptionZoom(event.target.value));
+  els.captionZoomOut.addEventListener('click', () => setCaptionZoom(state.captionTrack.zoom - 1));
+  els.captionZoomIn.addEventListener('click', () => setCaptionZoom(state.captionTrack.zoom + 1));
+  els.captionZoomFit.addEventListener('click', () => {
+    setCaptionZoom(1);
+    els.captionTrackScroll.scrollLeft = 0;
+  });
+  els.captionTrackScroll.addEventListener(
+    'wheel',
+    (event) => {
+      if (!event.ctrlKey && !event.metaKey) return;
+      event.preventDefault();
+      setCaptionZoom(state.captionTrack.zoom + (event.deltaY < 0 ? 1 : -1));
+    },
+    { passive: false },
+  );
+  els.captionPlayBtn.addEventListener('click', toggleCaptionPlayback);
+  els.captionJumpSelectedBtn.addEventListener('click', () => {
+    const caption = selectedCaption();
+    if (!caption) {
+      setGenStatus('请先选择一条字幕', 'error');
+      return;
+    }
+    stopCaptionPlayback();
+    setCaptionWorkbenchElapsed(caption.startMs);
+  });
+  els.captionTrackCanvas.addEventListener('click', (event) => {
+    if (event.target.closest('.caption-block, .caption-shot')) return;
+    const rect = els.captionTrackCanvas.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
+    stopCaptionPlayback();
+    setCaptionWorkbenchElapsed(ratio * captionTrackDurationMs());
+  });
+  els.addCaptionBtn.addEventListener('click', () => {
+    addCaption().catch((err) => setGenStatus(`添加字幕失败：${err.message}`, 'error'));
+  });
+  els.captionEditor.addEventListener('submit', (event) => {
+    event.preventDefault();
+    saveCaptionEditor();
+  });
+  els.deleteCaptionBtn.addEventListener('click', deleteSelectedCaption);
+
+  els.generatedAssetsBtn.addEventListener('click', openGeneratedAssets);
+  els.closeGeneratedAssets.addEventListener('click', closeGeneratedAssetsPanel);
+  els.generatedAssetsBackdrop.addEventListener('click', closeGeneratedAssetsPanel);
+  els.generatedAssetsSearch.addEventListener('input', renderGeneratedAssets);
+  els.generatedAssetsFilter.addEventListener('change', renderGeneratedAssets);
+
   els.promptLibraryBtn.addEventListener('click', () => openPromptLibrary());
   els.closePromptLibrary.addEventListener('click', closePromptLibraryPanel);
   els.promptLibraryBackdrop.addEventListener('click', closePromptLibraryPanel);
@@ -2701,9 +4282,14 @@ function bindEvents() {
   });
 
   els.addToLibraryBtn.addEventListener('click', requestAddCurrentToLibrary);
-  els.saveFlipbookFrameBtn.addEventListener('click', requestAddCurrentToLibrary);
+  els.saveFlipbookFrameBtn.addEventListener('click', requestSaveCurrentFrame);
   els.libraryNameCancel.addEventListener('click', hideLibraryNameModal);
   els.libraryNameConfirm.addEventListener('click', confirmAddToLibrary);
+  els.appDialogCancel.addEventListener('click', () => closeAppDialog(null));
+  els.appDialogConfirm.addEventListener('click', confirmAppDialog);
+  els.appDialog.addEventListener('click', (event) => {
+    if (event.target === els.appDialog) closeAppDialog(null);
+  });
 
   els.useCurrentRefBtn.addEventListener('click', () => {
     const node = selectedNode();
@@ -2735,9 +4321,26 @@ function bindEvents() {
   });
 
   document.addEventListener('keydown', (e) => {
+    if (!els.appDialog.hidden) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeAppDialog(null);
+      } else if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        confirmAppDialog();
+      }
+      return;
+    }
     if (!els.imageLightbox.hidden && e.key === 'Escape') {
       e.preventDefault();
       closeLightbox();
+      return;
+    }
+    if (!els.captionTrackPanel.hidden && e.key === ' ') {
+      if (!e.target.matches('input, textarea, select, [contenteditable="true"]')) {
+        e.preventDefault();
+        toggleCaptionPlayback();
+      }
       return;
     }
     if (state.preview.open) {
@@ -2788,12 +4391,18 @@ function bindEvents() {
     if (e.key === 'Escape') {
       if (!els.deleteModal.hidden) hideDeleteModal();
       else if (!els.libraryNameModal.hidden) hideLibraryNameModal();
+      else if (!els.captionTrackPanel.hidden) closeCaptionTrackPanel();
+      else if (!els.generatedAssetsPanel.hidden) closeGeneratedAssetsPanel();
       else if (!els.promptLibraryPanel.hidden) closePromptLibraryPanel();
       else if (!els.libraryPanel.hidden) closeLibraryPanel();
     }
   });
 
   window.addEventListener('resize', updateTrackWidth);
+  window.addEventListener('resize', () => {
+    updateCaptionPreviewAspect();
+    if (!els.captionTrackPanel.hidden) renderCaptionTrack();
+  });
 }
 
 async function init() {
