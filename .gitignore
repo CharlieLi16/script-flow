@@ -1,4 +1,7 @@
 node_modules/
+.venv/
+__pycache__/
+*.pyc
 .env
 data/images/*
 !data/images/.gitkeep
@@ -7,3 +10,8 @@ data/refs/*
 data/timeline.json
 data/library.json
 data/generated-assets.json
+
+# Local inspiration pack (too large for GitHub)
+MirroS_Inspiration_Pack/
+MirroS_Inspiration_Pack.tar.gz
+**/_discovery_cache.json

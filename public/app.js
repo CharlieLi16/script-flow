@@ -1,3 +1,28 @@
+import { apiClient, fetchWithLocal, validateGenerationAccess } from './api-client.js';
+import {
+  applyFlipbookGeneration,
+  applyKeyframeGeneration,
+  applySegmentGeneration,
+  applySingleGeneration,
+  composeAnchoredKeyframePrompt,
+  confirmKeyframesLocally,
+  prepareGenerateRequest,
+} from './generation-helper.js';
+import { initProjects, renderProjectMenu, setProjectChangeHandler, hydrateActiveProjectSeedAssets } from './projects-ui.js';
+import { mountSettingsPanel, initSettings } from './settings-panel.js';
+import { autoSyncIfConnected } from './folder-sync.js';
+import { clearDisplayUrlCache, resolveImagesIn, setImgSrc, imgAsset } from './url-display.js';
+import { requestPersistentStorage } from './storage/idb.js';
+import { resumeOpenJobs } from './storage/jobs.js';
+
+let autoSyncTimer = null;
+function scheduleAutoSync() {
+  clearTimeout(autoSyncTimer);
+  autoSyncTimer = setTimeout(() => {
+    autoSyncIfConnected();
+  }, 1200);
+}
+
 const NODE_HEIGHT = 112;
 const TRACK_PADDING = 48;
 const UNDO_MS = 5000;
@@ -8,8 +33,10 @@ const GENERATE_TIMEOUT_MS = 180000;
 const state = {
   timeline: { title: '', nodes: [], captions: [] },
   selectedId: null,
+  selectedIds: new Set(),
   providers: [],
   dragId: null,
+  dragIds: [],
   dropTarget: null,
   lastDragAt: 0,
   pointerY: null,
@@ -286,23 +313,7 @@ const SYSTEM_PROMPT_IDS = new Set([
 ]);
 
 async function api(path, options = {}) {
-  let res;
-  try {
-    res = await fetch(path, {
-      headers: { 'Content-Type': 'application/json', ...options.headers },
-      ...options,
-    });
-  } catch (err) {
-    if (err.name === 'AbortError') {
-      throw new Error('生成超时，服务器可能无响应，请再试一次');
-    }
-    throw new Error('无法连接服务器，请确认服务正在运行后重试');
-  }
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new Error(data.error || `服务器请求失败（${res.status}）`);
-  }
-  return data;
+  return apiClient(path, options);
 }
 
 let appDialogSession = null;
@@ -661,13 +672,14 @@ function renderFlipbookResult() {
     button.type = 'button';
     button.className = `flipbook-frame-thumb${index === state.flipbook.previewIndex ? ' active' : ''}`;
     button.dataset.index = String(index);
-    button.innerHTML = `<img src="${url}" alt="帧 ${index + 1}" /><span>${index + 1}</span>`;
+    button.innerHTML = `${imgAsset(url, '', `帧 ${index + 1}`)}<span>${index + 1}</span>`;
     button.addEventListener('click', () => {
       stopFlipbookPreview();
       showFlipbookFrame(index);
     });
     els.flipbookFramesStrip.appendChild(button);
   });
+  resolveImagesIn(els.flipbookFramesStrip);
 }
 
 function chain32PromptValues() {
@@ -752,7 +764,7 @@ function renderChain32Keyframes(node = selectedNode()) {
     const canRegen = index >= 1 && index <= 3 && Boolean(refs[0] && refs[1]);
     card.innerHTML = `
       <div class="chain32-keyframe-frame">
-        ${url ? `<img src="${url}" alt="${label}" />` : `<span>${roles[index]}</span>`}
+        ${url ? imgAsset(url, '', label) : `<span>${roles[index]}</span>`}
       </div>
       <div class="chain32-keyframe-meta">
         <strong>${label}</strong>
@@ -772,7 +784,7 @@ function renderChain32Keyframes(node = selectedNode()) {
     });
     els.chain32Keyframes.appendChild(card);
   });
-
+  resolveImagesIn(els.chain32Keyframes);
   const midReady = Boolean(keyframeUrls[1] && keyframeUrls[2] && keyframeUrls[3]);
   const canConfirm =
     midReady &&
@@ -1120,8 +1132,12 @@ function renderCaptionWorkbenchFrame() {
 
   els.captionPreviewImage.hidden = !imageUrl;
   els.captionPreviewEmpty.hidden = Boolean(imageUrl);
-  if (imageUrl && (els.captionPreviewImage.getAttribute('src') || '').split('?')[0] !== imageUrl) {
-    els.captionPreviewImage.src = imageUrl;
+  if (imageUrl) {
+    if (els.captionPreviewImage.getAttribute('data-asset') !== imageUrl) {
+      setImgSrc(els.captionPreviewImage, imageUrl);
+    }
+  } else {
+    setImgSrc(els.captionPreviewImage, '');
   }
   if (!imageUrl) updateCaptionPreviewAspect();
   els.captionPreviewNode.textContent = nodeLabel;
@@ -1340,7 +1356,7 @@ function renderCaptionTrack() {
     shot.style.width = `${Math.max(0.8, (shotDuration / duration) * 100)}%`;
     shot.title = `${node.title || '未命名镜头'} · ${(shotDuration / 1000).toFixed(1)}s`;
     shot.innerHTML = `
-      ${node.imageUrl ? `<img src="${escapeHtml(node.imageUrl)}" alt="" />` : '<span class="caption-shot-empty"></span>'}
+      ${node.imageUrl ? imgAsset(node.imageUrl) : '<span class="caption-shot-empty"></span>'}
       <strong>${escapeHtml(node.title || '未命名')}</strong>
     `;
     const shotStart = shotCursor;
@@ -1352,7 +1368,7 @@ function renderCaptionTrack() {
     els.captionShotLane.appendChild(shot);
     shotCursor += shotDuration;
   }
-
+  resolveImagesIn(els.captionShotLane);
   els.captionLane.innerHTML = '';
   els.captionLane.style.height = `${Math.max(76, rowEnds.length * 34 + 12)}px`;
   for (const caption of items) {
@@ -1511,10 +1527,11 @@ function renderPromptReferenceTags() {
     tag.type = 'button';
     tag.className = 'prompt-reference-tag';
     tag.title = `参考图 @${index + 1}`;
-    tag.innerHTML = `<img src="${refs[index]}" alt="" /><span>@${index + 1}</span>`;
+    tag.innerHTML = `${imgAsset(refs[index])}<span>@${index + 1}</span>`;
     tag.addEventListener('click', () => insertReferenceMention(index));
     els.promptReferenceTags.appendChild(tag);
   }
+  resolveImagesIn(els.promptReferenceTags);
 }
 
 function renderReferenceMentionMenu() {
@@ -1541,7 +1558,7 @@ function renderReferenceMentionMenu() {
     const option = document.createElement('button');
     option.type = 'button';
     option.className = 'reference-mention-option';
-    option.innerHTML = `<img src="${url}" alt="" /><strong>@${index + 1}</strong>`;
+    option.innerHTML = `${imgAsset(url)}<strong>@${index + 1}</strong>`;
     option.addEventListener('mousedown', (event) => {
       event.preventDefault();
       insertReferenceMention(index);
@@ -1549,6 +1566,7 @@ function renderReferenceMentionMenu() {
     els.referenceMentionMenu.appendChild(option);
   }
   els.referenceMentionMenu.hidden = false;
+  resolveImagesIn(els.referenceMentionMenu);
 }
 
 function renderRefChips() {
@@ -1575,7 +1593,7 @@ function renderRefChips() {
         : '';
     chip.title = `点击 @${index + 1} 插入 Prompt${role}`;
     chip.innerHTML = `
-      <img src="${url}" alt="" />
+      ${imgAsset(url)}
       <button type="button" class="ref-chip-mention" aria-label="插入参考图 @${index + 1}">@${index + 1}${role ? role.replace(' · ', ' ') : ''}</button>
       <button type="button" class="ref-chip-remove" aria-label="移除参考图">×</button>
     `;
@@ -1588,6 +1606,7 @@ function renderRefChips() {
     });
     els.refChips.appendChild(chip);
   });
+  resolveImagesIn(els.refChips);
   updateReferenceCount();
   renderPromptReferenceTags();
   if (els.genMode.value === 'chain32') renderChain32Keyframes();
@@ -1624,6 +1643,12 @@ function updateNodeActions() {
 
 async function loadLibrary() {
   state.library = await api('/api/library');
+  try {
+    await hydrateActiveProjectSeedAssets(state.library);
+    clearDisplayUrlCache();
+  } catch {
+    /* seed hydrate is best-effort */
+  }
   renderLibraryGrid();
 }
 
@@ -1642,6 +1667,7 @@ function openLibrary(mode = 'manage') {
   els.libraryHint.textContent = selecting
     ? '点击图片进行多选；已选参考会用于当前节点出图'
     : '保存角色、场景、风格参考，之后可以重复使用';
+  els.libraryPanel.classList.toggle('is-selecting', selecting);
   els.libraryFooter.hidden = !selecting;
   els.librarySearch.value = '';
   els.libraryPanel.hidden = false;
@@ -1731,8 +1757,8 @@ function showGeneratedAssetFrame(assetId, index) {
   const playBtn = card.querySelector('.generated-asset-play');
   if (coverImage) {
     const next = frameUrls[safeIndex];
-    if ((coverImage.getAttribute('src') || '').split('?')[0] !== next) {
-      coverImage.src = next;
+    if (coverImage.getAttribute('data-asset') !== next) {
+      setImgSrc(coverImage, next);
     }
   }
   if (label) label.textContent = `${safeIndex + 1} / ${frameUrls.length}`;
@@ -1828,7 +1854,7 @@ function renderGeneratedAssets() {
     card.innerHTML = `
       <div class="generated-asset-cover${isAnimation ? ' is-animation' : ''}">
         <button type="button" class="generated-asset-cover-hit" aria-label="${isAnimation ? '放大查看当前帧' : '查看图片'}">
-          <img class="generated-asset-cover-image" src="${escapeHtml(coverUrl)}" alt="${escapeHtml(item.name || '')}" />
+          ${imgAsset(coverUrl, 'generated-asset-cover-image', item.name || '')}
         </button>
         <span class="generated-asset-type">${isAnimation ? '动画' : '图片'}</span>
         ${isAnimation
@@ -1852,7 +1878,7 @@ function renderGeneratedAssets() {
           ? `<div class="generated-asset-frames"${expanded ? '' : ' hidden'}>${frameUrls
               .map(
                 (url, index) =>
-                  `<button type="button" class="generated-asset-frame${index === currentIndex ? ' active' : ''}" data-frame-index="${index}" title="预览第 ${index + 1} 帧"><img src="${escapeHtml(url)}" alt="第 ${index + 1} 帧" /></button>`,
+                  `<button type="button" class="generated-asset-frame${index === currentIndex ? ' active' : ''}" data-frame-index="${index}" title="预览第 ${index + 1} 帧">${imgAsset(url, '', `第 ${index + 1} 帧`)}</button>`,
               )
               .join('')}</div>`
           : ''}
@@ -1955,6 +1981,7 @@ function renderGeneratedAssets() {
     }
     els.generatedAssetsGrid.appendChild(card);
   }
+  resolveImagesIn(els.generatedAssetsGrid);
 
   if (resumePreview) {
     const stillVisible = visibleItems.some((item) => item.id === resumePreview.id);
@@ -2155,7 +2182,7 @@ function renderLibraryGrid() {
     card.className = `library-card${activeRefs.has(item.imageUrl) ? ' selected' : ''}`;
     card.innerHTML = `
       <div class="library-card-image">
-        <img src="${item.imageUrl}" alt="${escapeHtml(item.name)}" />
+        ${imgAsset(item.imageUrl, '', item.name)}
         <span class="library-card-check" aria-hidden="true">✓</span>
       </div>
       <div class="library-card-meta">
@@ -2193,6 +2220,7 @@ function renderLibraryGrid() {
 
     els.libraryGrid.appendChild(card);
   }
+  resolveImagesIn(els.libraryGrid);
   updateReferenceCount();
 }
 
@@ -2233,7 +2261,7 @@ async function uploadLibraryFile(file, name) {
   const form = new FormData();
   form.append('image', file);
   form.append('name', name || file.name.replace(/\.[^.]+$/, '') || '参考图');
-  const res = await fetch('/api/library', { method: 'POST', body: form });
+  const res = await fetchWithLocal('/api/library', { method: 'POST', body: form, _formData: form });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || 'Upload failed');
   await loadLibrary();
@@ -2243,7 +2271,7 @@ async function uploadLibraryFile(file, name) {
 async function uploadRefFile(file) {
   const form = new FormData();
   form.append('image', file);
-  const res = await fetch('/api/refs/upload', { method: 'POST', body: form });
+  const res = await fetchWithLocal('/api/refs/upload', { method: 'POST', body: form, _formData: form });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || 'Upload failed');
   addGenRef(data.imageUrl);
@@ -2331,7 +2359,9 @@ function updateTrackWidth() {
   const minViewport = els.timelineScroll.clientHeight || 560;
   const contentHeight = Math.max(minViewport, count * NODE_HEIGHT + TRACK_PADDING);
   els.timelineTrack.style.setProperty('--track-height', `${contentHeight}px`);
-  els.timelineNodeCount.textContent = `${count} 幕`;
+  const selectedCount = state.selectedIds.size;
+  els.timelineNodeCount.textContent =
+    selectedCount > 1 ? `${count} 幕 · ${selectedCount} 已选` : `${count} 幕`;
   updateScrollNav();
 }
 
@@ -2387,7 +2417,7 @@ function renderImagePreview(url) {
       setImagePreviewAspect(image.naturalWidth, image.naturalHeight);
     }, { once: true });
     image.dataset.sourceUrl = url;
-    image.src = url;
+    setImgSrc(image, url);
   }
 
   if (image.complete && image.naturalWidth) {
@@ -2403,7 +2433,7 @@ function resizePromptComposer() {
 function openLightbox(url, alt = '') {
   if (!url) return;
   const cleanUrl = String(url).split('?')[0];
-  els.lightboxImage.src = cleanUrl;
+  setImgSrc(els.lightboxImage, cleanUrl);
   els.lightboxImage.alt = alt || '';
   els.imageLightbox.hidden = false;
   els.lightboxClose.focus();
@@ -2412,7 +2442,7 @@ function openLightbox(url, alt = '') {
 function closeLightbox() {
   if (els.imageLightbox.hidden) return;
   els.imageLightbox.hidden = true;
-  els.lightboxImage.removeAttribute('src');
+  setImgSrc(els.lightboxImage, '');
   els.lightboxImage.alt = '';
 }
 
@@ -2542,31 +2572,61 @@ function escapeHtml(str) {
 
 function bindNodeDrag(el, node) {
   el.addEventListener('dragstart', (e) => {
+    if (!state.selectedIds.has(node.id)) {
+      state.selectedIds = new Set([node.id]);
+      state.selectedId = node.id;
+      renderEditor();
+    }
     state.dragId = node.id;
+    state.dragIds =
+      state.selectedIds.has(node.id) && state.selectedIds.size > 1
+        ? selectedNodeIdsInOrder()
+        : [node.id];
     state.lastDragAt = Date.now();
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('text/plain', node.id);
+    e.dataTransfer.setData('application/x-script-flow-node-count', String(state.dragIds.length));
+    if (state.dragIds.length > 1) {
+      const ghost = document.createElement('div');
+      ghost.className = 'node-group-drag-ghost';
+      ghost.textContent = `${state.dragIds.length} 个节点`;
+      document.body.appendChild(ghost);
+      e.dataTransfer.setDragImage(ghost, 24, 18);
+      setTimeout(() => ghost.remove(), 0);
+    }
     els.timelineScroll.classList.add('is-dragging');
     startAutoScroll();
-    requestAnimationFrame(() => el.classList.add('dragging'));
+    requestAnimationFrame(() => {
+      for (const item of els.nodesLayer.querySelectorAll('.timeline-node')) {
+        const inGroup = state.dragIds.includes(item.dataset.id);
+        item.classList.toggle('group-dragging', inGroup);
+        item.classList.toggle('dragging', item.dataset.id === node.id);
+      }
+      updateTrackWidth();
+    });
   });
 
   el.addEventListener('dragend', () => {
     state.dragId = null;
+    state.dragIds = [];
     state.lastDragAt = Date.now();
     state.dropTarget = null;
     state.pointerY = null;
     clearDropIndicators();
     stopAutoScroll();
     els.timelineScroll.classList.remove('is-dragging');
-    el.classList.remove('dragging');
+    for (const item of els.nodesLayer.querySelectorAll('.timeline-node')) {
+      item.classList.remove('dragging', 'group-dragging');
+    }
+    renderNodes();
+    renderEditor();
   });
 
   el.addEventListener('dragover', (e) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     state.pointerY = e.clientY;
-    if (state.dragId === node.id) {
+    if (state.dragIds.includes(node.id)) {
       clearDropIndicators();
       return;
     }
@@ -2584,7 +2644,7 @@ function bindNodeDrag(el, node) {
     state.lastDragAt = Date.now();
     const fromId = e.dataTransfer.getData('text/plain');
     const toId = node.id;
-    if (fromId && fromId !== toId) {
+    if (fromId && !state.dragIds.includes(toId)) {
       reorderNodes(fromId, toId, state.dropTarget?.position || 'before');
     }
     state.dropTarget = null;
@@ -2611,7 +2671,7 @@ function bindEdgeDropZone(el, edge) {
     if (edge === 'start') {
       reorderNodesToIndex(fromId, 0);
     } else {
-      reorderNodesToIndex(fromId, state.timeline.nodes.length - 1);
+      reorderNodesToIndex(fromId, state.timeline.nodes.length);
     }
     state.dropTarget = null;
     clearDropIndicators();
@@ -2639,28 +2699,31 @@ function renderNodes() {
 
   state.timeline.nodes.forEach((node, index) => {
     const startLabel = formatTime(nodeStartMs(index));
+    const isSelected = state.selectedIds.has(node.id) || node.id === state.selectedId;
+    const isGroupDragging = state.dragIds.includes(node.id);
     const el = document.createElement('div');
-    el.className = `timeline-node side-${node.side}${node.id === state.selectedId ? ' selected' : ''}${state.dragId === node.id ? ' dragging' : ''}${node.includeInPreview === false ? ' excluded-preview' : ''}`;
+    el.className = `timeline-node side-${node.side}${isSelected ? ' selected' : ''}${node.id === state.selectedId ? ' primary-selected' : ''}${state.dragId === node.id ? ' dragging' : ''}${isGroupDragging ? ' group-dragging' : ''}${node.includeInPreview === false ? ' excluded-preview' : ''}`;
     el.dataset.id = node.id;
     el.draggable = true;
     el.tabIndex = 0;
     el.setAttribute('role', 'button');
     el.setAttribute(
       'aria-label',
-      `${startLabel}，${node.title || '未命名节点'}${node.includeInPreview === false ? '，不参与动画预览' : ''}，拖拽可排序`,
+      `${startLabel}，${node.title || '未命名节点'}${isSelected ? '，已选中' : ''}${node.includeInPreview === false ? '，不参与动画预览' : ''}，拖拽可排序`,
     );
 
     el.innerHTML = `
       <button type="button" class="node-insert node-insert-before" aria-label="在此处添加节点" title="在此处添加节点">+</button>
       <div class="node-tick"></div>
       <div class="node-dot"></div>
+      ${isSelected && state.selectedIds.size > 1 ? '<span class="node-multi-check" aria-hidden="true">✓</span>' : ''}
       <span class="node-generation-badge" hidden></span>
       ${node.includeInPreview === false ? '<span class="node-preview-state" title="不参与动画预览">仅记录</span>' : ''}
       <div class="node-card">
         <div class="node-time">${escapeHtml(startLabel)}</div>
         <div class="node-title">${escapeHtml(node.title || '未命名')}</div>
         ${node.script ? `<div class="node-script-preview">${escapeHtml(truncate(node.script))}</div>` : ''}
-        ${node.imageUrl ? `<img class="node-thumb" src="${node.imageUrl}" alt="" draggable="false" />` : ''}
+        ${node.imageUrl ? imgAsset(node.imageUrl, 'node-thumb') : ''}
       </div>
       ${index === state.timeline.nodes.length - 1
         ? '<button type="button" class="node-insert node-insert-after" aria-label="在末尾添加节点" title="在末尾添加节点">+</button>'
@@ -2687,14 +2750,15 @@ function renderNodes() {
 
     el.addEventListener('click', (e) => {
       e.stopPropagation();
-      selectNode(node.id);
+      if (Date.now() - state.lastDragAt < 250) return;
+      selectNode(node.id, { additive: e.shiftKey || e.ctrlKey || e.metaKey });
     });
 
     el.addEventListener('keydown', (e) => {
       if (e.target !== el) return;
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
-        selectNode(node.id);
+        selectNode(node.id, { additive: e.shiftKey || e.ctrlKey || e.metaKey });
       }
     });
 
@@ -2709,6 +2773,7 @@ function renderNodes() {
   els.nodesLayer.appendChild(endZone);
 
   updateTrackWidth();
+  resolveImagesIn(els.nodesLayer);
 }
 
 function renderEditor() {
@@ -2917,6 +2982,8 @@ async function commitPendingDelete() {
     await api(`/api/nodes/${pending.node.id}`, { method: 'DELETE' });
   } catch (err) {
     state.timeline.nodes.splice(pending.index, 0, pending.node);
+    state.selectedIds.add(pending.node.id);
+    state.selectedId = pending.node.id;
     state.timeline.nodes.forEach((n, i) => {
       n.side = i % 2 === 0 ? 'up' : 'down';
     });
@@ -2938,6 +3005,7 @@ function undoDelete() {
     n.side = i % 2 === 0 ? 'up' : 'down';
   });
   state.selectedId = pending.node.id;
+  state.selectedIds.add(pending.node.id);
   renderNodes();
   renderEditor();
 }
@@ -2945,6 +3013,13 @@ function undoDelete() {
 async function loadTimeline() {
   state.timeline = await api('/api/timeline');
   if (!Array.isArray(state.timeline.captions)) state.timeline.captions = [];
+  const validIds = new Set(state.timeline.nodes.map((node) => node.id));
+  state.selectedIds = new Set([...state.selectedIds].filter((id) => validIds.has(id)));
+  if (state.selectedId && validIds.has(state.selectedId)) {
+    state.selectedIds.add(state.selectedId);
+  } else {
+    state.selectedId = selectedNodeIdsInOrder().at(-1) || null;
+  }
   syncLocalTiming();
   els.timelineTitle.value = state.timeline.title || '';
   renderNodes();
@@ -2957,13 +3032,34 @@ async function loadProviders() {
   renderProviderSelect();
 }
 
-function selectNode(id) {
-  state.selectedId = id;
+function selectedNodeIdsInOrder() {
+  return state.timeline.nodes
+    .filter((node) => state.selectedIds.has(node.id))
+    .map((node) => node.id);
+}
+
+function selectNode(id, { additive = false, scroll = true } = {}) {
+  if (additive) {
+    if (state.selectedIds.has(id)) {
+      state.selectedIds.delete(id);
+      if (state.selectedId === id) {
+        const remaining = selectedNodeIdsInOrder();
+        state.selectedId = remaining[remaining.length - 1] || null;
+      }
+    } else {
+      state.selectedIds.add(id);
+      state.selectedId = id;
+    }
+  } else {
+    state.selectedIds = new Set([id]);
+    state.selectedId = id;
+  }
   renderNodes();
   renderEditor();
+  if (!scroll || !state.selectedId) return;
   requestAnimationFrame(() => {
     els.nodesLayer
-      .querySelector(`[data-id="${id}"]`)
+      .querySelector(`[data-id="${state.selectedId}"]`)
       ?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
   });
 }
@@ -2974,6 +3070,7 @@ async function saveTitle() {
     method: 'PUT',
     body: JSON.stringify({ title: state.timeline.title }),
   });
+  scheduleAutoSync();
 }
 
 async function saveNodeFields({ announce = true } = {}) {
@@ -3021,6 +3118,7 @@ async function saveNodeFields({ announce = true } = {}) {
   if (announce) {
     setGenStatus(state.autoSave ? '已保存' : '已手动保存', 'success');
   }
+  scheduleAutoSync();
 }
 
 function scheduleAutoSave() {
@@ -3080,7 +3178,9 @@ function confirmDeleteNode() {
     state.timeline.nodes.forEach((n, i) => {
       n.side = i % 2 === 0 ? 'up' : 'down';
     });
-    state.selectedId = null;
+    state.selectedIds.delete(node.id);
+    const remainingSelection = selectedNodeIdsInOrder();
+    state.selectedId = remainingSelection[remainingSelection.length - 1] || null;
     renderNodes();
     renderEditor();
 
@@ -3093,20 +3193,30 @@ function confirmDeleteNode() {
   }, 220);
 }
 
+function movingNodeIds(fromId) {
+  const active = state.dragIds.length
+    ? state.dragIds
+    : state.selectedIds.has(fromId)
+      ? selectedNodeIdsInOrder()
+      : [fromId];
+  return active.includes(fromId) ? active : [fromId];
+}
+
 async function reorderNodes(fromId, toId, position) {
   const previousNodes = [...state.timeline.nodes];
   const nodes = [...state.timeline.nodes];
-  const fromIdx = nodes.findIndex((node) => node.id === fromId);
-  const toIdx = nodes.findIndex((node) => node.id === toId);
-  if (fromIdx < 0 || toIdx < 0) return;
-
-  const [moved] = nodes.splice(fromIdx, 1);
-  const targetIdx = nodes.findIndex((node) => node.id === toId);
+  const moveIds = movingNodeIds(fromId);
+  const moveSet = new Set(moveIds);
+  if (moveSet.has(toId)) return;
+  const moved = nodes.filter((node) => moveSet.has(node.id));
+  const remaining = nodes.filter((node) => !moveSet.has(node.id));
+  const targetIdx = remaining.findIndex((node) => node.id === toId);
+  if (!moved.length || targetIdx < 0) return;
   const insertIdx = position === 'after' ? targetIdx + 1 : targetIdx;
-  nodes.splice(insertIdx, 0, moved);
-  applyNodeSides(nodes);
+  remaining.splice(insertIdx, 0, ...moved);
+  applyNodeSides(remaining);
 
-  state.timeline.nodes = nodes;
+  state.timeline.nodes = remaining;
   syncLocalTiming();
   renderNodes();
   renderEditor();
@@ -3114,12 +3224,14 @@ async function reorderNodes(fromId, toId, position) {
   try {
     state.timeline = await api('/api/nodes/reorder', {
       method: 'POST',
-      body: JSON.stringify({ order: nodes.map((node) => node.id) }),
+      body: JSON.stringify({ order: remaining.map((node) => node.id) }),
     });
     syncLocalTiming();
     renderNodes();
     renderEditor();
+    if (moved.length > 1) setGenStatus(`已批量移动 ${moved.length} 个节点`, 'success');
   } catch (err) {
+    applyNodeSides(previousNodes);
     state.timeline.nodes = previousNodes;
     syncLocalTiming();
     renderNodes();
@@ -3131,15 +3243,22 @@ async function reorderNodes(fromId, toId, position) {
 async function reorderNodesToIndex(fromId, targetIndex) {
   const previousNodes = [...state.timeline.nodes];
   const nodes = [...state.timeline.nodes];
-  const fromIdx = nodes.findIndex((node) => node.id === fromId);
-  if (fromIdx < 0) return;
+  const moveIds = movingNodeIds(fromId);
+  const moveSet = new Set(moveIds);
+  const moved = nodes.filter((node) => moveSet.has(node.id));
+  if (!moved.length) return;
+  const removedBeforeTarget = nodes
+    .slice(0, Math.max(0, targetIndex))
+    .filter((node) => moveSet.has(node.id)).length;
+  const remaining = nodes.filter((node) => !moveSet.has(node.id));
+  const clamped = Math.max(
+    0,
+    Math.min(targetIndex - removedBeforeTarget, remaining.length),
+  );
+  remaining.splice(clamped, 0, ...moved);
+  applyNodeSides(remaining);
 
-  const [moved] = nodes.splice(fromIdx, 1);
-  const clamped = Math.max(0, Math.min(targetIndex, nodes.length));
-  nodes.splice(clamped, 0, moved);
-  applyNodeSides(nodes);
-
-  state.timeline.nodes = nodes;
+  state.timeline.nodes = remaining;
   syncLocalTiming();
   renderNodes();
   renderEditor();
@@ -3147,12 +3266,14 @@ async function reorderNodesToIndex(fromId, targetIndex) {
   try {
     state.timeline = await api('/api/nodes/reorder', {
       method: 'POST',
-      body: JSON.stringify({ order: nodes.map((node) => node.id) }),
+      body: JSON.stringify({ order: remaining.map((node) => node.id) }),
     });
     syncLocalTiming();
     renderNodes();
     renderEditor();
+    if (moved.length > 1) setGenStatus(`已批量移动 ${moved.length} 个节点`, 'success');
   } catch (err) {
+    applyNodeSides(previousNodes);
     state.timeline.nodes = previousNodes;
     syncLocalTiming();
     renderNodes();
@@ -3187,18 +3308,19 @@ async function uploadImage(file) {
   const form = new FormData();
   form.append('image', file);
 
-  const res = await fetch(`/api/nodes/${node.id}/upload`, {
+  const res = await fetchWithLocal(`/api/nodes/${node.id}/upload`, {
     method: 'POST',
     body: form,
+    _formData: form,
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Upload failed');
+  const updated = await res.json();
+  const nodeData = updated.node || updated;
 
   const idx = state.timeline.nodes.findIndex((n) => n.id === node.id);
   if (idx >= 0) {
-    state.timeline.nodes[idx] = data.node;
+    state.timeline.nodes[idx] = nodeData;
   }
-  renderImagePreview(data.imageUrl);
+  renderImagePreview(nodeData.imageUrl);
   renderNodes();
   updateImageActions();
 }
@@ -3260,17 +3382,26 @@ async function generateAnchoredKeyframe(request, keyframeIndex, { force = false 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), GENERATE_TIMEOUT_MS);
   try {
+    const node = state.timeline.nodes.find((n) => n.id === request.nodeId);
+    const prompt = await composeAnchoredKeyframePrompt(
+      request.userPrompt,
+      keyframeIndex,
+      request.segmentPrompts || [],
+      state.promptLibrary,
+    );
+    const prepared = await prepareGenerateRequest({
+      ...request,
+      prompt,
+      referenceUrls: request.referenceUrls || [],
+    });
     const data = await api('/api/generate-animation-chain/keyframe', {
       method: 'POST',
-      body: JSON.stringify({
-        ...request,
-        keyframeIndex,
-        force,
-      }),
+      body: JSON.stringify({ ...prepared, keyframeIndex, force }),
       signal: controller.signal,
     });
+    const applied = await applyKeyframeGeneration(node, request, data);
     state.flipbook.keyframeStatus[keyframeIndex] = 'ready';
-    return data;
+    return applied;
   } catch (err) {
     state.flipbook.keyframeStatus[keyframeIndex] = 'error';
     throw err;
@@ -3294,19 +3425,27 @@ async function generateAnchoredSegment(request, segmentIndex, { force = false } 
     9,
   );
   try {
+    const prepared = await prepareGenerateRequest({
+      ...request,
+      prompt: segmentPrompt,
+      referenceUrls: request.referenceUrls || [],
+    });
     const data = await api('/api/generate-animation-chain/segment', {
       method: 'POST',
       body: JSON.stringify({
-        ...request,
+        ...prepared,
         mode: 'anchored-chain32',
-        prompt: segmentPrompt,
         segmentIndex,
         force,
+        columns: 2,
+        rows: 2,
       }),
       signal: controller.signal,
     });
+    const node = state.timeline.nodes.find((n) => n.id === request.nodeId);
+    const applied = await applySegmentGeneration(node, request, data);
     state.flipbook.segmentStatus[segmentIndex] = 'ready';
-    return data;
+    return applied;
   } catch (err) {
     state.flipbook.segmentStatus[segmentIndex] = 'error';
     throw err;
@@ -3423,10 +3562,7 @@ async function generateChain32Segments(node, baseRequest, indexes = [0, 1, 2, 3]
   }
 
   try {
-    const confirmData = await api('/api/generate-animation-chain/confirm-keyframes', {
-      method: 'POST',
-      body: JSON.stringify({ nodeId: node.id, chainId: request.chainId }),
-    });
+    const confirmData = await confirmKeyframesLocally(node.id, request.chainId);
     applyAnchoredNode(node.id, confirmData);
 
     const results = await Promise.allSettled(
@@ -3708,17 +3844,26 @@ async function generateImage(previousRequest = null) {
   const activeGeneration = startGenerationProgress(request, controller);
 
   try {
+    const prepared = await prepareGenerateRequest(request);
     const endpoint = mode === 'flipbook' ? '/api/generate-animation' : '/api/generate';
     const data = await api(endpoint, {
       method: 'POST',
-      body: JSON.stringify(request),
+      body: JSON.stringify(prepared),
       signal: controller.signal,
     });
 
+    let result;
+    if (mode === 'flipbook') {
+      result = await applyFlipbookGeneration(node.id, data, prompt);
+    } else {
+      result = await applySingleGeneration(node.id, data, prompt);
+    }
+
     const idx = state.timeline.nodes.findIndex((n) => n.id === node.id);
     if (idx >= 0) {
-      state.timeline.nodes[idx] = data.node;
+      state.timeline.nodes[idx] = result.node;
     }
+    await autoSyncIfConnected();
     renderNodes();
     updateImageActions();
     updateNodeActions();
@@ -3729,12 +3874,12 @@ async function generateImage(previousRequest = null) {
     );
     if (state.selectedId === node.id) {
       if (mode === 'flipbook') {
-        renderImagePreview(data.imageUrl || data.node.imageUrl);
+        renderImagePreview(result.imageUrl || result.node.imageUrl);
         renderFlipbookResult();
         showFlipbookFrame(0);
-        setGenStatus(`已裁切 ${data.animation?.frameCount || 0} 帧并应用到节点`, 'success');
+        setGenStatus(`已裁切 ${result.animation?.frameCount || 0} 帧并应用到节点`, 'success');
       } else {
-        renderImagePreview(data.imageUrl);
+        renderImagePreview(result.imageUrl);
         renderFlipbookResult();
         setGenStatus('已生成并应用到节点', 'success');
       }
@@ -3810,12 +3955,11 @@ function renderPreviewScene(index, localElapsed = 0) {
     : `-${Math.min(localElapsed, nodeDuration(node) - 1)}ms`;
   els.previewImage.alt = node.title || '';
   if (imageUrl) {
-    const nextSrc = `${imageUrl}?preview=${index}-${imageUrl}`;
-    if (els.previewImage.getAttribute('src') !== nextSrc) {
-      els.previewImage.src = nextSrc;
+    if (els.previewImage.getAttribute('data-asset') !== imageUrl) {
+      setImgSrc(els.previewImage, imageUrl);
     }
   } else {
-    els.previewImage.removeAttribute('src');
+    setImgSrc(els.previewImage, '');
   }
   els.previewStage.classList.toggle('is-paused', !state.preview.playing);
 }
@@ -4015,6 +4159,14 @@ function bindEvents() {
     startAutoScroll();
   });
 
+  els.timelineScroll.addEventListener('click', (event) => {
+    if (event.target.closest('.timeline-node, .timeline-empty-add')) return;
+    state.selectedIds.clear();
+    state.selectedId = null;
+    renderNodes();
+    renderEditor();
+  });
+
   els.timelineScroll.addEventListener('dblclick', (e) => {
     if (e.target.closest('.timeline-node') || Date.now() - state.lastDragAt < 700) return;
     addNode();
@@ -4022,6 +4174,7 @@ function bindEvents() {
 
   els.closeEditor.addEventListener('click', () => {
     state.selectedId = null;
+    state.selectedIds.clear();
     renderNodes();
     renderEditor();
   });
@@ -4395,6 +4548,10 @@ function bindEvents() {
       else if (!els.generatedAssetsPanel.hidden) closeGeneratedAssetsPanel();
       else if (!els.promptLibraryPanel.hidden) closePromptLibraryPanel();
       else if (!els.libraryPanel.hidden) closeLibraryPanel();
+      else if (state.selectedIds.size > 1 && state.selectedId) {
+        state.selectedIds = new Set([state.selectedId]);
+        renderNodes();
+      }
     }
   });
 
@@ -4405,6 +4562,15 @@ function bindEvents() {
   });
 }
 
+let projectMenuController = null;
+
+async function reloadProjectData() {
+  clearDisplayUrlCache();
+  await Promise.all([loadTimeline(), loadProviders(), loadLibrary(), loadPromptLibrary()]);
+  if (projectMenuController?.refreshList) await projectMenuController.refreshList();
+  autoSyncIfConnected();
+}
+
 async function init() {
   const savedTheme = localStorage.getItem('script-flow-theme');
   const preferredTheme = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
@@ -4413,7 +4579,26 @@ async function init() {
   setPanelWidth('editor', localStorage.getItem('script-flow-editor-width'), false);
   bindEvents();
   updateFlipbookUi();
-  await Promise.all([loadTimeline(), loadProviders(), loadLibrary(), loadPromptLibrary()]);
+  await requestPersistentStorage();
+  await initSettings();
+  const projectHost = document.querySelector('#project-menu-host');
+  const settingsHost = document.querySelector('#settings-host');
+  if (projectHost) {
+    projectMenuController = renderProjectMenu(projectHost, {
+      prompt: (title, label, value) =>
+        openAppDialog({ title, input: { label, placeholder: label, value } }),
+      onSwitch: reloadProjectData,
+      onFolder: () => autoSyncIfConnected(),
+    });
+  }
+  if (settingsHost) mountSettingsPanel(settingsHost);
+  window.addEventListener('script-flow-settings-saved', () => {
+    loadProviders().catch(() => {});
+  });
+  setProjectChangeHandler(reloadProjectData);
+  await initProjects();
+  await reloadProjectData();
+  resumeOpenJobs().catch(() => {});
 }
 
 init();

@@ -16,6 +16,7 @@
         <span class="brand-name">Script Flow</span>
         <span class="brand-tag">视频剧本时间线</span>
       </div>
+      <div id="project-menu-host" class="project-menu-host"></div>
       <div class="topbar-actions">
         <input type="text" id="timeline-title" class="title-input" placeholder="剧本标题" />
         <button type="button" id="theme-toggle" class="btn-icon theme-toggle" aria-label="切换浅色模式" title="切换主题">
@@ -25,6 +26,7 @@
         <button type="button" id="generated-assets-btn" class="btn btn-ghost">素材仓库</button>
         <button type="button" id="library-btn" class="btn btn-ghost">设定集管理</button>
         <button type="button" id="preview-btn" class="btn btn-preview">▶ 预览</button>
+        <div id="settings-host" class="settings-host"></div>
         <div class="topbar-node-actions">
           <button type="button" id="save-node-top-btn" class="btn btn-save" disabled>保存</button>
           <button type="button" id="delete-node-top-btn" class="btn btn-danger" disabled>删除</button>
@@ -61,7 +63,7 @@
           </div>
           <button type="button" id="scroll-right" class="scroll-nav scroll-nav-right" aria-label="向下滚动">⌄</button>
         </div>
-        <p class="timeline-hint">上下拖拽排序 · 双击空白添加</p>
+        <p class="timeline-hint">Shift 点击多选 · 拖动任一选中节点批量排序</p>
       </section>
 
       <div class="panel-resizer panel-resizer-left" id="timeline-resizer" role="separator" aria-label="调整时间线宽度" aria-orientation="vertical" tabindex="0"></div>

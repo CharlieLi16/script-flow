@@ -1,17 +1,27 @@
 {
   "name": "script-flow",
-  "version": "1.0.0",
-  "description": "Timeline-based script and storyboard tool with pluggable image generation",
+  "version": "2.0.0",
+  "description": "Timeline-based script and storyboard tool with local-first multi-user storage",
   "type": "module",
   "scripts": {
-    "start": "node server/index.js",
-    "dev": "node --watch server/index.js"
+    "build": "node scripts/build-seed.mjs",
+    "dev": "bash scripts/with-proxy.sh vercel dev",
+    "dev:legacy": "bash scripts/with-proxy.sh node --watch server/index.js",
+    "start": "bash scripts/with-proxy.sh node server/index.js",
+    "start:vercel": "bash scripts/with-proxy.sh vercel dev",
+    "seed:build": "node scripts/build-seed.mjs",
+    "trigger:dev": "bash scripts/with-proxy.sh npx trigger.dev@latest dev"
   },
   "dependencies": {
+    "@trigger.dev/sdk": "^3.3.17",
+    "@vercel/blob": "^0.27.3",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "multer": "^1.4.5-lts.1",
     "openai": "^4.77.0",
     "sharp": "^0.35.3"
+  },
+  "devDependencies": {
+    "vercel": "^39.3.0"
   }
 }
