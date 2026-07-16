@@ -11,6 +11,7 @@ import { getActiveProjectId, setActiveProjectId } from './storage/repository.js'
 import { hydrateSeedAssets, revokeAllAssetUrls } from './storage/assets.js';
 import { exportProjectZip, importProjectZip } from './zip-project.js';
 import { connectProjectFolder, syncProjectToFolder } from './folder-sync.js';
+import { fetchLegacySnapshot, importLegacyLocalProject } from './legacy-import.js';
 
 let onProjectChange = null;
 let lastSeedAssetBaseUrl = '';
@@ -94,7 +95,20 @@ export async function renameCurrentProject(name) {
   return renameProject(id, name);
 }
 
-export { listProjects, exportProjectZip, importProjectZip, connectProjectFolder, syncProjectToFolder };
+export async function runLegacyImport({ onProgress } = {}) {
+  const result = await importLegacyLocalProject({ onProgress });
+  await switchProject(result.project.id);
+  return result;
+}
+
+export {
+  listProjects,
+  exportProjectZip,
+  importProjectZip,
+  connectProjectFolder,
+  syncProjectToFolder,
+  fetchLegacySnapshot,
+};
 
 export function renderProjectMenu(container, callbacks) {
   container.innerHTML = `
@@ -106,10 +120,12 @@ export function renderProjectMenu(container, callbacks) {
         <div id="project-list" class="project-list"></div>
         <div class="project-menu-actions">
           <button type="button" id="project-new-btn" class="btn btn-ghost btn-sm">+ 新建</button>
+          <button type="button" id="project-import-legacy-btn" class="btn btn-ghost btn-sm">导入旧剧本</button>
           <button type="button" id="project-import-btn" class="btn btn-ghost btn-sm">导入 ZIP</button>
           <button type="button" id="project-export-btn" class="btn btn-ghost btn-sm">导出 ZIP</button>
           <button type="button" id="project-folder-btn" class="btn btn-ghost btn-sm">本地文件夹</button>
         </div>
+        <p id="project-import-status" class="project-import-status" hidden></p>
       </div>
     </div>
   `;
@@ -117,6 +133,13 @@ export function renderProjectMenu(container, callbacks) {
   const switcherBtn = container.querySelector('#project-switcher-btn');
   const dropdown = container.querySelector('#project-dropdown');
   const listEl = container.querySelector('#project-list');
+  const statusEl = container.querySelector('#project-import-status');
+  const legacyBtn = container.querySelector('#project-import-legacy-btn');
+
+  function setStatus(text) {
+    statusEl.hidden = !text;
+    statusEl.textContent = text || '';
+  }
 
   async function refreshList() {
     const projects = await listProjects();
@@ -132,6 +155,16 @@ export function renderProjectMenu(container, callbacks) {
       .join('');
     const current = projects.find((p) => p.id === currentId);
     container.querySelector('#project-current-name').textContent = current?.name || '项目';
+
+    try {
+      const legacy = await fetchLegacySnapshot();
+      legacyBtn.hidden = !legacy;
+      if (legacy?.summary) {
+        legacyBtn.title = `导入「${legacy.summary.title}」：${legacy.summary.nodes} 节点 / ${legacy.summary.imagePaths} 张图`;
+      }
+    } catch {
+      legacyBtn.hidden = true;
+    }
   }
 
   switcherBtn.addEventListener('click', async () => {
@@ -153,6 +186,47 @@ export function renderProjectMenu(container, callbacks) {
     await createNewProject(name);
     dropdown.hidden = true;
     if (callbacks.onSwitch) callbacks.onSwitch();
+  });
+
+  legacyBtn.addEventListener('click', async () => {
+    legacyBtn.disabled = true;
+    setStatus('正在导入旧剧本…');
+    try {
+      const preview = await fetchLegacySnapshot();
+      if (!preview) {
+        setStatus('未找到本地旧剧本');
+        return;
+      }
+      if (callbacks.confirm) {
+        const ok = await callbacks.confirm(
+          '导入旧剧本',
+          `将导入「${preview.summary.title}」：${preview.summary.nodes} 个节点、${preview.summary.captions} 条字幕、约 ${preview.summary.imagePaths} 张图片。会新建一个项目，不会覆盖现有项目。`,
+        );
+        if (!ok) {
+          setStatus('');
+          return;
+        }
+      }
+      const result = await runLegacyImport({
+        onProgress: ({ phase, current, total, message }) => {
+          if (phase === 'assets' && total) {
+            setStatus(`导入图片 ${current}/${total}…`);
+          } else if (message) {
+            setStatus(message);
+          }
+        },
+      });
+      setStatus(
+        `已导入：${result.summary.nodes} 节点，图片 ${result.assets.imported}/${result.assets.total}` +
+          (result.assets.failed ? `（${result.assets.failed} 张失败）` : ''),
+      );
+      await refreshList();
+      if (callbacks.onSwitch) callbacks.onSwitch();
+    } catch (err) {
+      setStatus(err.message || '导入失败');
+    } finally {
+      legacyBtn.disabled = false;
+    }
   });
 
   container.querySelector('#project-import-btn').addEventListener('click', async () => {

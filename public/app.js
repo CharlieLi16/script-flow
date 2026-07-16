@@ -4587,6 +4587,8 @@ async function init() {
     projectMenuController = renderProjectMenu(projectHost, {
       prompt: (title, label, value) =>
         openAppDialog({ title, input: { label, placeholder: label, value } }),
+      confirm: (title, message) =>
+        openAppDialog({ title, message, confirmLabel: '开始导入' }),
       onSwitch: reloadProjectData,
       onFolder: () => autoSyncIfConnected(),
     });

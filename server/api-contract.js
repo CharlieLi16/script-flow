@@ -10,6 +10,7 @@ import generateAnimationHandler from '../api/generate-animation.js';
 import keyframeHandler from '../api/generate-animation-chain/keyframe.js';
 import segmentHandler from '../api/generate-animation-chain/segment.js';
 import seedLibraryHandler from '../api/seed/library.js';
+import legacySnapshotHandler from '../api/legacy/snapshot.js';
 import animationChainJobHandler from '../api/jobs/animation-chain.js';
 import jobStatusHandler from '../api/jobs/status.js';
 
@@ -57,6 +58,7 @@ export function mountApiContract(app) {
   );
 
   app.get('/api/seed/library', wrapVercelHandler(seedLibraryHandler));
+  app.get('/api/legacy/snapshot', wrapVercelHandler(legacySnapshotHandler));
 
   app.post('/api/jobs/animation-chain', wrapVercelHandler(animationChainJobHandler));
   app.get('/api/jobs/:runId', async (req, res, next) => {

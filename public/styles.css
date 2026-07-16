@@ -4048,6 +4048,16 @@ input[type='range']:focus-visible::-moz-range-thumb {
   border-top: 1px solid var(--border);
 }
 
+.project-import-status {
+  margin: 0.5rem 0 0;
+  padding: 0.4rem 0.45rem;
+  border-radius: 8px;
+  background: var(--accent-dim);
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
 .settings-panel {
   position: fixed;
   top: 50%;
